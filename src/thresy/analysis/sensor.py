@@ -18,8 +18,9 @@ rate. Definitions (all thresholds are module constants):
 * **Dropout.** No heart rate for at least :data:`DROPOUT_S` seconds while moving.
 
 The verdict is ``unreliable`` with a high-confidence lock of 5 minutes or more or with more
-than 15 % of the moving time flagged, ``suspect`` when anything is flagged, else ``ok``.
-``avg_hr_clean`` and ``max_hr_clean`` leave flagged samples out.
+than 15 % of the moving time flagged, ``suspect`` when anything is reported, else ``ok``.
+``avg_hr_clean`` and ``max_hr_clean`` leave flagged samples out (high-confidence locks and
+spikes; ``possible`` locks are reported but not removed).
 """
 
 from __future__ import annotations
@@ -91,7 +92,14 @@ def cadence_lock(df: pd.DataFrame) -> list[dict[str, Any]]:
             merged[-1][1] = j
         else:
             merged.append([i, j])
+    n = len(like)
     for i, j in merged:
+        # the window share lags the true edges: extend over adjacent cadence-like samples
+        # (allowing gaps of up to 5 s)
+        while i > 0 and like[max(i - 5, 0) : i].any():
+            i = max(k for k in range(max(i - 5, 0), i) if like[k])
+        while j < n - 1 and like[j + 1 : min(j + 6, n)].any():
+            j = max(k for k in range(j + 1, min(j + 6, n)) if like[k])
         secs = t[j] - t[i]
         if secs < LOCK_MIN_S:
             continue
@@ -199,7 +207,7 @@ def check(df: pd.DataFrame, activity: Activity | None = None) -> dict[str, Any]:
     jmp = jumps(df)
     drops = dropouts(df)
     flagged = np.zeros(len(df), dtype=bool)
-    for item in locks + spk:
+    for item in [x for x in locks if x["confidence"] == "high"] + spk:
         flagged[item["i"] : item["j"] + 1] = True
     moving = (
         ((~df["paused"]) & (df["speed"].fillna(0) >= MOVING_SPEED_MPS)).to_numpy()

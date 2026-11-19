@@ -211,9 +211,11 @@ def detect_from_records(
     values = x[moving].dropna().to_numpy()
     if signal == "power":
         values = values[values > 0]
-    split = two_means(values) if values.size >= 60 else None
-    if split is None:
+    if values.size < 60:
         return Detection("none", signal, note="not enough moving data")
+    split = two_means(values)
+    if split is None:
+        return Detection("none", signal, note="no clear fast/slow structure (constant)")
     threshold, lo, hi, sd_lo, sd_hi = split
     separation = math.sqrt(2) * (hi - lo) / math.sqrt(sd_lo**2 + sd_hi**2 + 1e-12)
     if lo <= 0 or hi / lo < MIN_RATIO or separation < MIN_SEPARATION:
