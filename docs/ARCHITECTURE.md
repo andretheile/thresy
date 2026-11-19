@@ -22,6 +22,7 @@ Code, comments and docs are in English. The language the coach speaks is a deplo
 4. **Postgres is the single store.** No SQLite, Parquet or DuckDB. Raw Garmin payloads are kept as `jsonb` so derived columns can be recomputed.
 5. **Open-source ready: nothing athlete-specific in git.** `legacy/` and `private/` are ignored. Everything that belongs to one athlete comes from configuration, the database, or `private/`: names, places, coordinates, segment definitions, race lists, paces, heart-rate values, memory files, Garmin activity ids. None of it may appear in code, tests, docs, fixtures or commit messages. Fixtures in the repo are synthetic. Tests that need real data read it from `COACH_LEGACY_DIR`, pick their inputs dynamically (for example "the first three FIT files"), compare against the legacy store rather than against hard-coded numbers, and skip when the directory is unset or missing.
 6. **Subscription auth.** With Claude Code the model is reached through the subscription token (`CLAUDE_CODE_OAUTH_TOKEN`). Never pass `--bare` (bare mode ignores that token).
+7. **Least privilege for the agent.** The agent has a shell and reads the web, so treat it as the least trusted part of the system. It gets its own database role (`coach_agent`), an environment built from an allow-list rather than inherited from the service, and no access to Telegram, Garmin or Google credentials or to the volumes that hold them. Anything with an external side effect (Garmin writes, calendar changes) is carried out by a service on the agent's request, never by the agent directly. Secrets are never stored in database tables.
 
 ## Components
 
@@ -65,7 +66,13 @@ legacy/          old export, ignored by git
 
 ## Database contract
 
-All timestamps are `timestamptz` in UTC unless the column name ends in `_local`. Two roles: `coach_app` (read/write, used by services) and `coach_ro` (SELECT only, used by the agent for ad-hoc SQL).
+All timestamps are `timestamptz` in UTC unless the column name ends in `_local`. Three roles, all created outside migrations (by the Postgres init script and by the test harness) because creating roles needs privileges the application must not have:
+
+| Role | Used by | Rights |
+|---|---|---|
+| `coach_app` | sync and bridge services, migrations | owns the schema, read/write |
+| `coach_agent` | `coach` commands run by the agent | SELECT on everything; INSERT on `outbox`; INSERT, UPDATE, DELETE on `planned_workouts`, `races`, `segments`, `segment_efforts`; nothing else |
+| `coach_ro` | `coach sql` | SELECT only, read-only sessions, statement timeout |
 
 ```sql
 CREATE TABLE activities (
@@ -259,9 +266,19 @@ Add indexes where queries need them (at least `activities(local_date)`, `hrv_rea
 
 Garmin keys sleep and HRV by the calendar date on which the athlete woke up. "Last night" is the row whose `wake_date` is today. The old bot repeatedly reported the night before because it read yesterday's key. Every reader and writer uses `wake_date` with this meaning, and `sleep_synced_at` records when a night first arrived so the coach can say "not synced yet" instead of showing stale data.
 
+### Store rules
+
+All writes go through `thresy.store`. Its rules:
+
+- A missing or error payload never overwrites a stored value.
+- `steps` never decreases (the current day's count is partial).
+- `sleep_synced_at` is set once, the first time real sleep data arrives (`sleepTimeSeconds > 0`; Garmin's pre-sync placeholder does not count).
+- Store functions do not insert events. Callers decide from the return values, so importing history raises none.
+- Garmin `sleepLevels.activityLevel` maps to 0 = deep, 1 = light, 2 = rem, 3 = awake. This was established from the data; the old bot treated 2 as awake, which is wrong.
+
 ### Events
 
-The sync poller inserts; the bridge consumes and sets `processed_at`. `dedupe_key` makes inserts idempotent.
+The sync poller inserts; the bridge consumes and sets `processed_at`. `dedupe_key` makes inserts idempotent. Dates and hours inside dedupe keys are UTC, except `wake_date`, which is Garmin's calendar date.
 
 | kind | dedupe_key | payload |
 |---|---|---|
@@ -298,7 +315,7 @@ class RunResult:
     ok: bool
     text: str                                 # the agent's final answer
     session_id: str | None
-    error_kind: Literal["rate_limit", "auth", "timeout", "crash", "other"] | None
+    error_kind: Literal["rate_limit", "auth", "timeout", "crash", "cancelled", "other"] | None
     error_detail: str | None
     cost_usd: float | None
     usage: dict | None
@@ -309,11 +326,18 @@ class RunResult:
 class AgentRunner(Protocol):
     name: str
     capabilities: RunnerCapabilities          # supports_resume, supports_streaming, supports_system_append
-    def run(self, req: RunRequest) -> AsyncIterator[RunEvent]: ...
+    def run(self, req: RunRequest) -> RunHandle: ...   # an AsyncIterator[RunEvent] with cancel(), result(), aclose()
     async def healthcheck(self) -> Health      # binary found, version, auth looks usable
 ```
 
-Rules: `run` always ends with exactly one `Final`, including on timeout, crash or cancellation, and never raises for agent-side failures. On timeout or cancellation it stops the whole child process group (SIGINT first, then SIGTERM, then SIGKILL). `get_runner(name, config)` returns the adapter for `claude`, `codex`, `cursor` or `fake`. Model tiers map to concrete model names per runner through config. Unattended-permission flags are adapter config because the container is the sandbox.
+Rules:
+
+- **Events.** `Started` comes at most once and may be absent when the run fails early. The stream ends with exactly one `Final`, including on timeout, crash and `handle.cancel()`. `run` never raises for agent-side failures. If the consuming task itself is cancelled, the run is stopped and `CancelledError` propagates without a `Final`.
+- **Stopping.** On timeout or cancellation the whole child process group is stopped (SIGINT, then SIGTERM, then SIGKILL). Once the harness has reported its final result, the runner waits only a short, configurable time for the process to exit before stopping it, so a lingering child cannot hold back an answer that is already there.
+- **Environment.** The child does not inherit the service's environment. It gets an allow-list (basic process variables, the harness's own auth and configuration variables, explicitly configured pass-through names) plus the adapter's configured additions and `req.env`. The bridge uses `req.env` to hand the agent its own database URLs and settings.
+- **No personal text on the command line.** Prompts and appended system instructions reach the harness through stdin or a private temporary file, not through arguments, because arguments are visible to every user on the host. Where a harness offers no alternative, the adapter's docs say so.
+- **Cost** is per run, not cumulative over a resumed session.
+- **Selection.** `get_runner(name, config)` returns the adapter for `claude`, `codex`, `cursor` or `fake`. Model tiers map to concrete model names per runner through config. Unattended-permission flags are adapter config because the container is the sandbox.
 
 ## Transport contract
 
@@ -333,15 +357,26 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## Configuration
 
-`COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_DATA_DIR` (FIT files, plots), `COACH_WORKSPACE_DIR`, `COACH_TZ` (default `UTC`), `COACH_LANGUAGE` (default `en`), `COACH_NAME` (default `Thresy`, the name the coach uses for itself), `COACH_RUNNER` (default `claude`), `COACH_TELEGRAM_TOKEN`, `COACH_TELEGRAM_CHAT_IDS`, plus runner-specific settings. `COACH_LEGACY_DIR` points tests and the importer at the old export.
+`COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_DATA_DIR` (FIT files, plots), `COACH_WORKSPACE_DIR`, `COACH_TZ` (default `UTC`), `COACH_LANGUAGE` (default `en`), `COACH_NAME` (default `Thresy`, the name the coach uses for itself), `COACH_RUNNER` (default `claude`), `COACH_TELEGRAM_TOKEN`, `COACH_TELEGRAM_CHAT_IDS`. `COACH_AGENT_DATABASE_URL` is the `coach_agent` URL the bridge hands to the agent as its `COACH_DATABASE_URL`. `COACH_LEGACY_DIR` points tests and the importer at the old export.
+
+Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
 
 ## Deployment
 
-One Compose stack on the server: `db` (postgres:16-alpine, named volume, internal network only) and `app` (one image; the sync poller and the bridge run as separate services from it). No published ports. Memory limits on every service because the host is shared and has no swap. The app runs as a non-root user.
+One Compose stack on the server, no published ports:
+
+- `db`: postgres:16-alpine, named volume, internal network only.
+- `migrate`: one-shot, applies migrations; the other app services start after it succeeds.
+- `sync` and `bridge`: the same app image, on the internal network plus an egress network. Non-root user, `init: true` so the agent's stray child processes are reaped, a memory limit on every service because the host is shared and has no swap.
+
+Each service gets only the environment and volumes it needs; there is no blanket `env_file`. Garmin credentials and tokens exist only in `sync` (own volume). The Telegram token and the model credential exist only in `bridge`. The agent's workspace and home directory are volumes of `bridge`. `ANTHROPIC_API_KEY` must stay unset where subscription auth is used, because it takes precedence over the subscription token. The agent CLI version is pinned in the image and upgraded deliberately.
+
+Backups (planned): nightly Postgres dump, original FIT files and the coach's memory files to an object-storage bucket, written by a credential that can create objects but not read or delete them.
 
 ## Rules for work packages
 
 - Stay inside the paths your package owns. If you need a change elsewhere, report it instead of making it.
+- Shared files have one owner, the foundation package: `pyproject.toml`, `uv.lock`, `.env.example`, `compose.yml`, `compose.dev.yml`, `docker/`, `migrations/`, `tests/conftest.py`, `src/thresy/config.py`, `src/thresy/cli.py`. Other packages list what they need from these in their report (a dependency, a variable, a volume, a table change).
 - Do not push to any remote, and do not touch the server.
 - The development Mac has about 6 GB of free disk. Do not build the app image locally, do not pull large images, and do not run the full legacy import locally (use `--limit`).
 - Every package ships tests, and `uv run ruff check` and `uv run pytest` pass before you report.
