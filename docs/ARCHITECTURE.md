@@ -74,7 +74,7 @@ All timestamps are `timestamptz` in UTC unless the column name ends in `_local`.
 | `coach_agent` | `coach` commands run by the agent | SELECT on everything; INSERT on `outbox` and `agent_requests`; INSERT, UPDATE, DELETE on `planned_workouts`, `races`, `segments`, `segment_efforts`; nothing else |
 | `coach_ro` | `coach sql` | SELECT only, read-only sessions, statement timeout |
 
-Only the owner can create objects, temporary tables included. `coach_agent` also has USAGE on the id sequences of the tables it may insert into.
+`coach_agent` may set only `kind` and `payload` when inserting into `agent_requests`, so it cannot forge a finished request. Only the owner can create objects, temporary tables included. `coach_agent` also has USAGE on the id sequences of the tables it may insert into.
 
 ```sql
 CREATE TABLE activities (
@@ -376,7 +376,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## CLI contract
 
-`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request` · `coach analysis …` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
+`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach plan …` · `coach races …` · `coach backup run|restore-check` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
 
 ## Configuration
 
@@ -401,6 +401,30 @@ Each service gets only the environment and volumes it needs; there is no blanket
 Volumes: `db-data`; `app-data` (`COACH_DATA_DIR`, original FIT files: read/write in `sync`, read-only in `bridge`, so the agent cannot alter source data); `garmin-auth` (`sync` only); `workspace` and `agent-home` (`bridge` only). Files the agent produces, such as plots, go under `out/` in the workspace, and `coach send` accepts paths only from there. `bridge` holds all three database URLs and hands the agent only the `coach_agent` and `coach_ro` ones. `ANTHROPIC_API_KEY` must stay unset where subscription auth is used, because it takes precedence over the subscription token. The agent CLI version is pinned in the image and upgraded deliberately.
 
 Backups (planned): nightly Postgres dump, original FIT files and the coach's memory files to an object-storage bucket, written by a credential that can create objects but not read or delete them.
+
+### The agent runs as its own Unix user
+
+An environment allow-list alone does not isolate the agent: a process can read the environment of every other process of the same user through `/proc`, and the bridge's environment holds the Telegram token, the read/write database URL and the model credential. So inside the `bridge` container the bridge runs as user `coach` and starts the agent CLI as a second user, `agent`, that owns the workspace and the agent's home directory. Requirements:
+
+- The agent's processes cannot read the bridge's (or PID 1's) environment or files, and cannot signal the bridge.
+- Nothing secret appears on a command line while switching users; the agent's environment is still exactly the runner's allow-list plus `req.env`.
+- The bridge can read `out/` in the workspace and write `inbox/`; the agent can read `inbox/` and write `out/`.
+- The runner stays harness-neutral: switching users is a setting of the shared subprocess layer, off by default so local development needs no second user.
+
+## Coach workspace contract
+
+`workspace/` in the repository is a generic template; a deployment's workspace volume is seeded from it once and then belongs to the agent. Athlete-specific content never comes from the template.
+
+- `AGENTS.md` (with `CLAUDE.md` containing only `@AGENTS.md`): who the coach is, how to behave, which commands exist, where memory lives. It names no athlete.
+- `playbooks/chat.md`, `playbooks/morning-briefing.md`, `playbooks/post-run.md`, plus further playbooks the coach reads on demand (week planning, race preparation). The bridge names the first three in its prompts.
+- `memory/`: Markdown files the coach reads at the start of a session and edits as it learns (athlete profile, physiology and paces, preferences and standing rules, current goals). The template holds empty skeletons with instructions; a deployment's real files are seeded from `private/` and live only in the workspace volume and its backups.
+- `out/` for files the agent produces, `inbox/` for files the athlete sent.
+
+Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat message and it sends nothing in between unless it carries content; the exact reply `NO_REPLY` sends nothing; "last night" means `wake_date` equal to today; numbers come from `coach` commands or SQL, never from memory of earlier conversations; anything it should remember goes into `memory/` or the plan tables, because sessions end daily.
+
+## Backups
+
+`coach backup run` writes to the target in `COACH_BACKUP_URL` (`file:///path` or `gs://bucket/prefix`): a compressed Postgres dump, original FIT files not yet uploaded, and the workspace's `memory/`. With `COACH_BACKUP_AGE_RECIPIENT` set, everything is encrypted with `age` before it leaves the host. The storage credential can create objects but not read, overwrite or delete them; retention is the bucket's lifecycle policy, not the application's. The last successful backup is recorded in `sync_state`, a failure raises a `backup_failed` event that the bridge reports like `sync_failed`, and `coach backup restore-check` proves a dump can be restored into a scratch database. Secrets are never part of a backup.
 
 ## Rules for work packages
 
