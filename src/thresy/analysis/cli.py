@@ -660,7 +660,7 @@ def sensor(
     plot: PlotOption = False,
     json_out: JsonOption = False,
 ) -> None:
-    """Can the heart rate be trusted? Cadence lock, jumps, spikes, dropouts.
+    """Can the heart rate be trusted? Cadence lock, level shifts, jumps, spikes, dropouts.
 
     Cadence lock = the wrist sensor reports the step rate as heart rate. Also gives the average
     and maximum heart rate without the flagged samples, and a verdict (ok, suspect, unreliable).
