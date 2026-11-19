@@ -68,8 +68,8 @@ class BridgeSettings(BaseSettings):
     model_config = SETTINGS_CONFIG
 
     bridge_transport: str = "telegram"
-    """``telegram`` (the only real transport so far) or ``fake`` (logs only; for trying the
-    bridge without a bot)."""
+    """The chat transport; ``telegram`` is the only one so far (see docs/bridge.md for adding
+    another)."""
 
     bridge_quiet_hours: str = "22:00-06:00"
     """Local window in which proactive messages (briefing, debrief, notifications) wait.

@@ -37,7 +37,7 @@ from thresy.transport import FakeTransport, InboundMessage
 
 pytestmark = pytest.mark.db
 
-TZ = "Europe/Berlin"
+TZ = "America/Chicago"
 ZONE = ZoneInfo(TZ)
 CHAT = "100"
 TOKEN = "123456:TEST-TOKEN-NOT-REAL"

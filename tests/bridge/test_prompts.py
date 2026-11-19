@@ -10,7 +10,7 @@ from thresy.bridge import prompts
 from thresy.bridge.briefing import numbers_lines
 from thresy.bridge.texts import TEXTS, lang_code, t
 
-ZONE = ZoneInfo("Europe/Berlin")
+ZONE = ZoneInfo("America/Chicago")
 NOW = datetime(2030, 1, 2, 8, 15, tzinfo=ZONE)
 FOOTER = (
     "Reply in German. Your final reply is sent to the athlete as one chat message. Send nothing"
@@ -31,7 +31,7 @@ def test_chat_prompt(tmp_path: Path) -> None:
     e = env(tmp_path, playbooks=True)
     prompt = prompts.chat_prompt(e, [prompts.PromptMessage(ts=NOW, kind="text", text="Wie war's?")])
     assert prompt == (
-        "The athlete wrote in the chat (telegram, Wed 2030-01-02 08:15, Europe/Berlin):\n\n"
+        "The athlete wrote in the chat (telegram, Wed 2030-01-02 08:15, America/Chicago):\n\n"
         "Wie war's?\n\n"
         "Follow playbooks/chat.md.\n" + FOOTER
     )
@@ -42,7 +42,7 @@ def test_briefing_and_debrief_prompts(tmp_path: Path) -> None:
     briefing = prompts.briefing_section(e, NOW.date(), synced=True, as_of="08:15")
     assert prompts.proactive_prompt(e, [briefing], NOW) == (
         "Nobody wrote: the bridge started this run on its own (Wed 2030-01-02 08:15,"
-        " Europe/Berlin).\n\n"
+        " America/Chicago).\n\n"
         "Trigger: morning briefing for Wed 2030-01-02. Last night's sleep (wake date 2030-01-02)"
         " has arrived in the database.\n\n"
         "Follow playbooks/morning-briefing.md.\n" + FOOTER + "\n"

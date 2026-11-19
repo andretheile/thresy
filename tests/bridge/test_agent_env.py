@@ -83,7 +83,7 @@ def test_child_process_gets_only_the_agent_environment(make_harness, tmp_path, m
             assert env["COACH_DATABASE_URL"] == h.settings.agent_database_url
             assert env["COACH_DATABASE_URL_RO"] == h.settings.database_url_ro
             assert env["COACH_RUN_ID"] == str(run_id)
-            assert env["TZ"] == "Europe/Berlin"
+            assert env["TZ"] == "America/Chicago"
             values = "\n".join(env.values())
             for secret in (TOKEN, h.settings.database_url, "garmin-secret", "s3cret"):
                 assert secret not in values
