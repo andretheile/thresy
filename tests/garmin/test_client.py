@@ -74,6 +74,14 @@ def test_wellness_calls_pass_iso_dates_and_empty_answers_become_none(offline, cl
     assert "/hrv-service/hrv/2030-01-02" in offline.paths()
 
 
+def test_empty_daily_summary_is_no_data(offline, client) -> None:
+    offline.routes["/usersummary-service/usersummary/daily/"] = {}  # the library raises
+    assert client.get_stats(D) is None
+    offline.routes["/usersummary-service/usersummary/daily/"] = api_error(500)
+    with pytest.raises(GarminError):
+        client.get_stats(D)
+
+
 def test_personal_records_list(offline, client) -> None:
     offline.routes["/personalrecord-service/personalrecord/prs/"] = [
         {"typeId": 3, "value": 1500.0},

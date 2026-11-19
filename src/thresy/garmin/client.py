@@ -64,6 +64,7 @@ def none_if_empty(payload: Any) -> Any:
     return payload
 
 
+NO_DATA_MESSAGE = "No data received from server"  # garminconnect's get_user_summary
 _STATUS_RE = re.compile(r"(?:API Error|Error|HTTP)\s*\(?(\d{3})")
 
 
@@ -186,7 +187,16 @@ class ConnectClient:
 
     @_translated
     def get_stats(self, day: date) -> dict[str, Any] | None:
-        return none_if_empty(self.garmin.get_stats(day.isoformat()))
+        import garminconnect as gc
+
+        try:
+            return none_if_empty(self.garmin.get_stats(day.isoformat()))
+        except gc.GarminConnectConnectionError as exc:
+            # The library raises this for an empty daily summary (e.g. a day that has not
+            # started yet in the Garmin profile's time zone): that is "no data", not a failure.
+            if type(exc) is gc.GarminConnectConnectionError and str(exc) == NO_DATA_MESSAGE:
+                return None
+            raise
 
     @_translated
     def get_steps_data(self, day: date) -> list[dict[str, Any]] | None:
