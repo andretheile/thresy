@@ -310,6 +310,25 @@ def test_missing_values_do_not_overwrite(conn) -> None:
     assert row["raw_hrv"]["hrvSummary"]["status"] == "BALANCED"
 
 
+def test_is_ok_payload() -> None:
+    assert store.is_ok_payload({"calendarDate": D.isoformat()})
+    assert not store.is_ok_payload({})
+    assert not store.is_ok_payload({"error": "HTTPError"})
+    assert not store.is_ok_payload(None)
+    assert not store.is_ok_payload([{"steps": 1}])
+
+
+@pytestmark_db
+def test_empty_payloads_do_not_overwrite_raw_payloads(conn) -> None:
+    sleep, hrv, stats = synthetic.sleep(D), synthetic.hrv(D), synthetic.stats(D)
+    store.upsert_wellness(conn, D, sleep=sleep, hrv=hrv, stats=stats)
+    store.upsert_wellness(conn, D, sleep={}, hrv={}, stats={})
+    row = conn.execute("SELECT raw_sleep, raw_hrv, raw_stats FROM wellness_daily").fetchone()
+    assert row["raw_sleep"] == sleep
+    assert row["raw_hrv"] == hrv
+    assert row["raw_stats"] == stats
+
+
 @pytestmark_db
 def test_hrv_readings_replaced_per_night(conn) -> None:
     store.upsert_wellness(conn, D, hrv=synthetic.hrv(D, values=[50, 51, 52, 53, 54]))

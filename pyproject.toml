@@ -9,14 +9,18 @@ requires-python = ">=3.13"
 dependencies = [
     "fitparse>=1.2.0",
     "garminconnect==0.3.20",
+    "google-cloud-storage>=3.4",
     "gpxpy>=1.6.2",
     "httpx>=0.28.1",
+    "markdown-it-py>=4",
     "matplotlib>=3.11",
     "numpy>=2.3",
     "pandas>=2.3",
     "psycopg[binary,pool]>=3.2",
     "pydantic-settings>=2.10",
+    "python-dotenv>=1.1",
     "python-telegram-bot>=22.0",
+    "requests>=2.32",
     "typer>=0.16",
 ]
 
