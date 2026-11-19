@@ -1,45 +1,77 @@
-"""`python -m thresy.runner` with the fake runner."""
+"""`coach runner ...`: the typer plugin mounted into the project's CLI."""
 
 from __future__ import annotations
 
 import json
 
-from thresy.runner.cli import main
+import typer
+from typer.testing import CliRunner
+
+from thresy import cli as coach_cli
+from thresy.runner import cli as runner_cli
+
+invoke = CliRunner().invoke
 
 
-def test_run_prints_events(tmp_path, capsys, monkeypatch):
+def test_plugin_is_a_typer_app_mounted_as_runner():
+    assert isinstance(runner_cli.app, typer.Typer)
+    result = invoke(coach_cli.get_app(), ["runner", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "check" in result.output and "run" in result.output
+
+
+def test_check_fake_json(monkeypatch):
     monkeypatch.delenv("COACH_RUNNER", raising=False)
-    code = main(["run", "--runner", "fake", "--cwd", str(tmp_path), "Hallo Coach"])
-    out = capsys.readouterr().out.splitlines()
-    assert code == 0
-    assert out[0].startswith("[started] session fake-")
-    assert out[1] == "[text] Hallo Coach"
-    assert out[2].startswith("[final] ok; runner fake")
-    assert out[3] == "Hallo Coach"
+    result = invoke(coach_cli.get_app(), ["runner", "check", "--runner", "fake", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] and payload["runner"] == "fake"
 
 
-def test_run_json(tmp_path, capsys):
-    code = main(["run", "--runner", "fake", "--cwd", str(tmp_path), "--json", "x"])
-    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert code == 0
-    assert [e["event"] for e in events] == ["started", "progress", "final"]
-    assert events[-1]["result"]["ok"] is True
-
-
-def test_check_json(capsys):
-    code = main(["check", "--runner", "fake", "--json"])
-    payload = json.loads(capsys.readouterr().out)
-    assert code == 0 and payload["ok"] and payload["runner"] == "fake"
-
-
-def test_check_missing_cli(capsys, monkeypatch, tmp_path):
+def test_check_failure_exit_code(monkeypatch, tmp_path):
     monkeypatch.setenv("COACH_CODEX_BIN", str(tmp_path / "missing-codex"))
-    code = main(["check", "--runner", "codex"])
-    assert code == 1
-    assert "FAIL codex" in capsys.readouterr().out
+    result = invoke(runner_cli.app, ["check", "--runner", "codex"])
+    assert result.exit_code == 1
+    assert "FAIL codex" in result.output
 
 
-def test_bad_config_exit_code(capsys, monkeypatch):
-    monkeypatch.setenv("COACH_RUNNER", "nonsense")
-    assert main(["check"]) == 2
-    assert "COACH_RUNNER" in capsys.readouterr().err
+def test_check_bad_runner(monkeypatch):
+    result = invoke(runner_cli.app, ["check", "--runner", "gemini", "--json"])
+    assert result.exit_code == 2
+    assert "unknown runner" in json.loads(result.output)["error"]
+
+
+def test_run_fake_text_and_json(tmp_path):
+    result = invoke(runner_cli.app, ["run", "--runner", "fake", "--cwd", str(tmp_path), "Hallo"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].startswith("[started]") and lines[1] == "[text] Hallo"
+    assert lines[-1] == "Hallo"
+
+    result = invoke(
+        runner_cli.app, ["run", "--runner", "fake", "--cwd", str(tmp_path), "--json", "x"]
+    )
+    assert result.exit_code == 0, result.output
+    events = [json.loads(line) for line in result.output.splitlines()]
+    assert [e["event"] for e in events] == ["started", "progress", "final"]
+
+
+def test_run_reads_prompt_from_stdin(tmp_path):
+    result = invoke(
+        runner_cli.app,
+        ["run", "--runner", "fake", "--cwd", str(tmp_path), "--tier", "fast", "-"],
+        input="aus stdin",
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-1] == "aus stdin"
+
+
+def test_config_reads_dotenv(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("COACH_RUNNER", raising=False)
+    monkeypatch.delenv("COACH_CLAUDE_MODEL_FAST", raising=False)
+    (tmp_path / ".env").write_text("COACH_RUNNER=fake\nCOACH_CLAUDE_MODEL_FAST=from-dotenv\n")
+    config = runner_cli._config()
+    assert config.runner == "fake" and config.claude.model_fast == "from-dotenv"
+    monkeypatch.setenv("COACH_RUNNER", "codex")  # the real environment wins
+    assert runner_cli._config().runner == "codex"
