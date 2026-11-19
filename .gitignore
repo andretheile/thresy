@@ -2,6 +2,9 @@
 legacy/
 private/
 
+# Local worktrees of coding agents (separate checkouts; never add them as embedded repos)
+.claude/worktrees/
+
 # Secrets
 .env
 .env.*
