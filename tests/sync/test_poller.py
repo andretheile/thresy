@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import random
 import signal
@@ -92,7 +93,8 @@ def test_regular_interval(harness) -> None:
 def test_jitter_varies_the_interval(harness) -> None:
     h = harness(start=at(12), jitter_s=120)
     h.poller(max_passes=6).run(install_signals=False)
-    gaps = [(b - a).total_seconds() for a, b in zip(h.provider.times, h.provider.times[1:])]
+    times = h.provider.times
+    gaps = [(b - a).total_seconds() for a, b in itertools.pairwise(times)]
     assert all(1080 - 5 <= g <= 1320 + 5 for g in gaps)
     assert len(set(gaps)) > 1
 
