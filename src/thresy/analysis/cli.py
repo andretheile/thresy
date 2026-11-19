@@ -671,7 +671,7 @@ def sensor(
 
     with _session(json_out) as conn:
         sel = _select(conn, ref, last, on_date, runs_only=not all_types)
-        df = load_records(conn, sel.activity.id, ["dist", "speed", "hr", "cad"])
+        df = load_records(conn, sel.activity.id, ["dist", "speed", "hr", "cad", "power"])
         result = sn.check(df, sel.activity)
     result["selected"] = sel.how
     path = None
@@ -713,6 +713,15 @@ def sensor(
             lines.append(f"jumps of >= 20 bpm within 3 s: {len(result['jumps'])}")
         for x in result["dropouts"]:
             lines.append(f"dropout: {fmt.duration(x['duration_s'])} without heart rate")
+        for x in result["level_shifts"]:
+            lines.append(
+                f"level shift at km {fmt.num(x['at_km'], 2)}: "
+                f"HR {x['hr_before']} -> {x['hr_after']}"
+                f" at the same {x['effort']} (change {x['effort_change']:.0%}); one side is wrong."
+                f" Share within 5 bpm of cadence: before {x['near_cadence_before']}, after"
+                f" {x['near_cadence_after']} (near 1 = sensor reading the step rate)"
+            )
+
         return "\n".join(lines) + _plot_line(path)
 
     _out(result, json_out, text)

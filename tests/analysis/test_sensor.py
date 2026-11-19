@@ -76,4 +76,30 @@ def test_no_heart_rate() -> None:
     df = frame(records([Phase(600, speed=3.0)]))
     df["hr"] = float("nan")
     result = sensor.check(df)
-    assert result["has_hr"] is False and result["verdict"] == "ok"
+    assert result["has_hr"] is False and result["verdict"] == "none"
+
+
+def test_level_shift_after_a_dropout_at_the_same_effort() -> None:
+    rng = random.Random(6)
+    df = _run(40)
+    locked = df["t"] < 1200  # the first 20 minutes the sensor reads the step rate
+    df.loc[locked, "hr"] = (
+        df.loc[locked, "cad"] + [rng.uniform(-1, 1) for _ in range(int(locked.sum()))]
+    ).round()
+    df.loc[(df["t"] >= 1200) & (df["t"] < 1260), "hr"] = float("nan")  # a dropout
+    df.loc[df["t"] >= 1260, "hr"] = 135.0
+    result = sensor.check(df)
+    assert result["verdict"] == "unreliable"
+    (shift,) = result["level_shifts"]
+    assert shift["hr_before"] == pytest.approx(172, abs=4) and shift["hr_after"] == 135
+    assert shift["near_cadence_before"] > 0.9 and shift["near_cadence_after"] < 0.1
+    assert shift["t"] == pytest.approx(1230, abs=60)  # around the dropout (1200-1260 s)
+
+
+def test_no_level_shift_when_the_effort_changes_or_the_runner_stops() -> None:
+    from tests.analysis.synth import interval_phases
+
+    assert sensor.check(frame(records(interval_phases())))["level_shifts"] == []
+    stop = [Phase(900, speed=3.5, hr=165, power=380), Phase(90, paused=True),
+            Phase(900, speed=3.5, hr=(125, 165), power=380)]  # fmt: skip
+    assert sensor.check(frame(records(stop)))["level_shifts"] == []

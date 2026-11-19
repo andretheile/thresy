@@ -16,9 +16,18 @@ rate. Definitions (all thresholds are module constants):
 * **Spike.** Heart rate at least :data:`SPIKE_BPM` above its centred 61 s median for at most
   :data:`SPIKE_MAX_S` seconds (a short excursion such as a false maximum).
 * **Dropout.** No heart rate for at least :data:`DROPOUT_S` seconds while moving.
+* **Level shift.** The median heart rate over :data:`SHIFT_WINDOW_S` seconds after a moment
+  differs by at least :data:`SHIFT_BPM` from the median over the same time before it (the
+  10 s on either side left out, so a dropout in between does not hide it), while the effort
+  (median power, else speed) changed by at most :data:`SHIFT_EFFORT_TOL`. A heart cannot
+  settle that far from where it was at the same effort within a minute or two, so one side is
+  wrong. For both sides the share of samples within 5 bpm of the cadence over 10 minutes is
+  reported: a side near 1 is probably the sensor reading the step rate. The first 5 minutes
+  are not checked (heart rate still rising).
 
-The verdict is ``unreliable`` with a high-confidence lock of 5 minutes or more or with more
-than 15 % of the moving time flagged, ``suspect`` when anything is reported, else ``ok``.
+The verdict is ``unreliable`` with a high-confidence lock of 5 minutes or more, a level
+shift, or more than 15 % of the moving time flagged; ``suspect`` when anything else is
+reported; ``none`` without heart rate; else ``ok``.
 ``avg_hr_clean`` and ``max_hr_clean`` leave flagged samples out (high-confidence locks and
 spikes; ``possible`` locks are reported but not removed).
 """
@@ -43,6 +52,90 @@ SPIKE_MAX_S = 30.0
 DROPOUT_S = 30.0
 UNRELIABLE_LOCK_S = 300.0
 UNRELIABLE_SHARE = 0.15
+SHIFT_BPM = 30.0
+SHIFT_SAMPLES = 30
+SHIFT_GAP_SAMPLES = 10
+SHIFT_EFFORT_TOL = 0.10
+SHIFT_STEADY_SAMPLES = 240
+SHIFT_STEADY_CV = 0.20
+SHIFT_MAX_DROPOUT_S = 300.0
+SHIFT_SKIP_S = 300.0
+NEAR_CADENCE_BPM = 5.0
+
+
+def _near_cadence_share(df: pd.DataFrame, lo: float, hi: float) -> float | None:
+    if "cad" not in df:
+        return None
+    part = df[(df["t"] >= lo) & (df["t"] < hi) & df["hr"].notna() & (df["cad"] >= LOCK_MIN_CADENCE)]
+    if len(part) < 30:
+        return None
+    return round(float((np.abs(part["hr"] - part["cad"]) <= NEAR_CADENCE_BPM).mean()), 2)
+
+
+def level_shifts(df: pd.DataFrame) -> list[dict[str, Any]]:
+    if "hr" not in df or df["hr"].notna().sum() < 120:
+        return []
+    effort_col = None
+    for col in ("power", "speed"):
+        if col in df and df[col].notna().mean() >= 0.8:
+            effort_col = col
+            break
+    if effort_col is None:
+        return []
+    valid = df[df["hr"].notna() & df[effort_col].notna()].reset_index(drop=True)
+    t = valid["t"].to_numpy(dtype="float64")
+    hr = valid["hr"].astype("float64")
+    effort = valid[effort_col].astype("float64")
+    n, gap = SHIFT_SAMPLES, SHIFT_GAP_SAMPLES
+
+    def before_after(x: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+        back = x.rolling(n, min_periods=n).median().shift(gap).to_numpy()
+        fwd = x[::-1].rolling(n, min_periods=n).median()[::-1].shift(-gap).to_numpy()
+        return back, fwd
+
+    before, after = before_after(hr)
+    e_before, e_after = before_after(effort)
+    roll = effort.rolling(SHIFT_STEADY_SAMPLES, center=True, min_periods=SHIFT_STEADY_SAMPLES // 2)
+    mean = roll.mean().to_numpy()
+    steady = roll.std(ddof=0).to_numpy() / np.where(mean > 0, mean, np.nan)
+    shift = after - before
+    effort_change = np.abs(e_after - e_before) / np.where(e_before > 0, e_before, np.nan)
+    span = np.full(len(t), np.inf)
+    stopped = np.ones(len(t), dtype=bool)
+    reach = n + gap
+    if len(t) > 2 * reach:
+        span[reach:-reach] = t[2 * reach :] - t[: -2 * reach]
+        # a watch pause or standing still lets the heart rate really drop: not a sensor fault
+        all_t = df["t"].to_numpy(dtype="float64")
+        stops = np.r_[0, np.cumsum((df["paused"] | df["still"]).to_numpy())]
+        lo = np.searchsorted(all_t, t[: -2 * reach], side="left")
+        hi = np.searchsorted(all_t, t[2 * reach :], side="right")
+        stopped[reach:-reach] = (stops[hi] - stops[lo]) > 0
+    flagged = (
+        (np.abs(shift) >= SHIFT_BPM)
+        & (effort_change <= SHIFT_EFFORT_TOL)
+        & (steady <= SHIFT_STEADY_CV)
+        & (span <= 2 * reach + SHIFT_MAX_DROPOUT_S)
+        & ~stopped
+        & (t >= t[0] + SHIFT_SKIP_S)
+    )
+    out = []
+    for i, j in _runs(np.nan_to_num(flagged).astype(bool)):
+        k = i + int(np.nanargmax(np.abs(shift[i : j + 1])))
+        at = float(t[k])
+        out.append(
+            {
+                "t": round(at),
+                "at_km": round(float(valid["dist"].iloc[k]) / 1000, 2) if "dist" in valid else None,
+                "hr_before": round(float(before[k])),
+                "hr_after": round(float(after[k])),
+                "effort": effort_col,
+                "effort_change": round(float(effort_change[k]), 2),
+                "near_cadence_before": _near_cadence_share(df, at - 600, at),
+                "near_cadence_after": _near_cadence_share(df, at, at + 600),
+            }
+        )
+    return out
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -206,6 +299,7 @@ def check(df: pd.DataFrame, activity: Activity | None = None) -> dict[str, Any]:
     spk = spikes(df)
     jmp = jumps(df)
     drops = dropouts(df)
+    shifts = level_shifts(df)
     flagged = np.zeros(len(df), dtype=bool)
     for item in [x for x in locks if x["confidence"] == "high"] + spk:
         flagged[item["i"] : item["j"] + 1] = True
@@ -219,9 +313,11 @@ def check(df: pd.DataFrame, activity: Activity | None = None) -> dict[str, Any]:
     flagged_s = float(dt[flagged & moving].sum())
     share = flagged_s / moving_s if moving_s > 0 else 0.0
     high_lock_s = sum(x["duration_s"] for x in locks if x["confidence"] == "high")
-    if high_lock_s >= UNRELIABLE_LOCK_S or share > UNRELIABLE_SHARE:
+    if "hr" not in df or df["hr"].notna().sum() == 0:
+        verdict = "none"
+    elif high_lock_s >= UNRELIABLE_LOCK_S or share > UNRELIABLE_SHARE or shifts:
         verdict = "unreliable"
-    elif locks or spk or jmp:
+    elif locks or spk or jmp or drops:
         verdict = "suspect"
     else:
         verdict = "ok"
@@ -242,6 +338,7 @@ def check(df: pd.DataFrame, activity: Activity | None = None) -> dict[str, Any]:
         "spikes": [{k: v for k, v in x.items() if k not in strip} for x in spk],
         "jumps": jmp,
         "dropouts": drops,
+        "level_shifts": shifts,
         "_locks": locks,
         "_spikes": spk,
     }

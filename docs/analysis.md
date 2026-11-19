@@ -146,10 +146,21 @@ Can the heart rate be trusted?
 - **Jumps**: a change of ≥ 20 bpm between samples at most 3 s apart.
 - **Spikes**: ≥ 20 bpm above the centred 61 s median for at most 30 s (a false maximum).
 - **Dropouts**: no heart rate for ≥ 30 s while moving.
+- **Level shifts**: the median heart rate of the 30 samples just after a moment differs by
+  ≥ 30 bpm from the 30 samples just before it (10 samples on either side left out; only
+  samples with heart rate count, so a dropout of up to 5 minutes in between is bridged), while
+  the effort (median power, else speed) of the two windows differs by at most 10 %, the effort
+  over the surrounding 240 samples is steady (coefficient of variation ≤ 0.2), and the watch
+  was neither paused nor standing in between. A heart cannot move that far within a minute or
+  two at the same effort, so one side is wrong: typically a wrist sensor that read the step rate
+  and then recovered, or the other way round. For both sides the share of samples within 5 bpm
+  of the cadence over 10 minutes is given; a side near 1 is the one reading the step rate. The
+  first 5 minutes are not checked.
 
-Verdict: `unreliable` with a high-confidence lock of 5 minutes or more, or more than 15 % of
-the moving time flagged; `suspect` when anything is reported; otherwise `ok`. The average and
-maximum without flagged samples (high-confidence locks and spikes) are given as well.
+Verdict: `unreliable` with a high-confidence lock of 5 minutes or more, a level shift, or more
+than 15 % of the moving time flagged; `suspect` when anything else is reported; `none` without
+heart rate; otherwise `ok`. The average and maximum without flagged samples (high-confidence
+locks and spikes) are given as well; after a level shift, use pace and power instead.
 
 ### `route find` and `route compare`
 
