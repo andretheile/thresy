@@ -71,7 +71,7 @@ All timestamps are `timestamptz` in UTC unless the column name ends in `_local`.
 | Role | Used by | Rights |
 |---|---|---|
 | `coach_app` | sync and bridge services, migrations | owns the schema, read/write |
-| `coach_agent` | `coach` commands run by the agent | SELECT on everything; INSERT on `outbox`; INSERT, UPDATE, DELETE on `planned_workouts`, `races`, `segments`, `segment_efforts`; nothing else |
+| `coach_agent` | `coach` commands run by the agent | SELECT on everything; INSERT on `outbox` and `agent_requests`; INSERT, UPDATE, DELETE on `planned_workouts`, `races`, `segments`, `segment_efforts`; nothing else |
 | `coach_ro` | `coach sql` | SELECT only, read-only sessions, statement timeout |
 
 Only the owner can create objects, temporary tables included. `coach_agent` also has USAGE on the id sequences of the tables it may insert into.
@@ -260,6 +260,13 @@ CREATE TABLE events (
 CREATE TABLE sync_state (
   key text PRIMARY KEY, value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE agent_requests (                  -- see "Agent requests" below
+  id bigserial PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now(),
+  kind text NOT NULL, payload jsonb NOT NULL DEFAULT '{}',
+  status text NOT NULL DEFAULT 'pending',      -- pending | running | done | failed
+  result jsonb, error text, run_id bigint,
+  started_at timestamptz, finished_at timestamptz, handled_by text
+);
 ```
 
 Add indexes where queries need them (at least `activities(local_date)`, `hrv_readings(wake_date)`, `messages(chat_id, ts)`, unprocessed `events`, unsent `outbox`).
@@ -288,6 +295,20 @@ The sync poller inserts; the bridge consumes and sets `processed_at`. `dedupe_ke
 | `new_activity` | `activity:<id>` | `{activity_id, type, is_run}` |
 | `garmin_auth_required` | `garmin_auth:<date>` | `{reason}` |
 | `sync_failed` | `sync_failed:<date>:<hour>` | `{error}` |
+
+### Agent requests
+
+The agent cannot reach Garmin or any other external service itself. When it needs a service to act, a `coach` command inserts a row into `agent_requests` and can wait for the result; the owning service picks it up, sets `status`, and writes `result` or `error`. The bridge uses the same table for chat commands such as `/sync`.
+
+| kind | handled by | payload | result |
+|---|---|---|---|
+| `sync_now` | sync | `{}` | `{new_activities: [ids], sleep_synced: bool, wake_date}` |
+
+More kinds (Garmin courses, calendar events) follow with their packages. Requests that change or delete external data will need the athlete's confirmation in chat before a service executes them.
+
+### Files
+
+Original FIT files are stored as `fit/<YYYY>/<activity_id>.fit` under `COACH_DATA_DIR`, where `YYYY` is the year of the activity's local start; `activities.fit_path` holds that relative path.
 
 ## Runner contract
 
@@ -355,13 +376,13 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## CLI contract
 
-`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
+`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request` · `coach analysis …` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
 
 ## Configuration
 
 `COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_DATA_DIR` (FIT files, plots), `COACH_WORKSPACE_DIR`, `COACH_TZ` (default `UTC`), `COACH_LANGUAGE` (default `en`), `COACH_NAME` (default `Thresy`, the name the coach uses for itself), `COACH_RUNNER` (default `claude`), `COACH_TELEGRAM_TOKEN`, `COACH_TELEGRAM_CHAT_IDS`. `COACH_AGENT_DATABASE_URL` is the `coach_agent` URL the bridge hands to the agent as its `COACH_DATABASE_URL`. `COACH_LEGACY_DIR` points tests and the importer at the old export.
 
-Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
+Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`, `COACH_<NAME>_PASS_ENV` (parent variables the agent may inherit), `COACH_<NAME>_EXIT_WAIT_S`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
 
 Garmin (sync only): `COACH_GARMIN_EMAIL`, `COACH_GARMIN_PASSWORD`, `COACH_GARMIN_TOKEN_DIR`. Model credential (bridge only), by harness: `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `CURSOR_API_KEY`. In `Settings` an empty value counts as unset.
 
