@@ -4,12 +4,14 @@ Command line (prompt on stdin, working directory = RunRequest.cwd):
 
     claude -p --output-format stream-json --verbose
            [--model <model>] [--resume <session_id>]
-           [--append-system-prompt <text>]
+           [--append-system-prompt-file <private temporary file>]
            --permission-mode bypassPermissions --permission-prompts none
            [extra args]
 
-`--bare` is never passed: bare mode ignores CLAUDE_CODE_OAUTH_TOKEN, which is
-how this deployment reaches the model through a subscription.
+No personal text is on the command line: the prompt goes to stdin and
+RunRequest.system_append to a file only this user can read, removed after the
+run. `--bare` is never passed: bare mode ignores CLAUDE_CODE_OAUTH_TOKEN, which
+is how this deployment reaches the model through a subscription.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar
 
 from .classify import classify_text, kind_from_http_status, summarize_tool
-from .cli_base import CliRunner, Invocation, StreamParser, usage_dict
+from .cli_base import CliRunner, Invocation, StreamParser, private_file, usage_dict
 from .config import HarnessConfig
 from .core import ErrorKind, Progress, RunEvent, RunnerCapabilities, RunRequest, RunResult, Started
 from .process import ProcessExit
@@ -83,6 +85,7 @@ class ClaudeStreamParser(StreamParser):
             return []
         if kind == "result":
             self._result = obj
+            self.terminal_seen = True
             if isinstance(obj.get("session_id"), str):
                 self.session_id = obj["session_id"]
             return []
@@ -242,6 +245,10 @@ class ClaudeRunner(CliRunner):
     base_env: ClassVar[Mapping[str, str]] = MappingProxyType(
         {"CLAUDE_CODE_STARTUP_FAILURE_RESULTS": "1"}
     )
+    # Auth (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ...)
+    # and configuration (CLAUDE_CONFIG_DIR, CLAUDE_CODE_*) per the env-vars docs.
+    env_prefixes = ("ANTHROPIC_", "CLAUDE_")
+    env_blocked = frozenset({"CLAUDE_CODE_SIMPLE"})  # bare mode, see module docstring
     verified = True
 
     def __init__(self, config: HarnessConfig | None = None, *, kill_grace_s: float | None = None):
@@ -260,10 +267,13 @@ class ClaudeRunner(CliRunner):
             argv += ["--model", model]
         if req.session_id:
             argv += ["--resume", req.session_id]
+        temp_dirs: tuple = ()
         if req.system_append:
-            argv += ["--append-system-prompt", req.system_append]
+            directory, path = private_file(req.system_append, "system-append.md")
+            temp_dirs = (directory,)
+            argv += ["--append-system-prompt-file", str(path)]
         argv += [*self.permission_args, *self.config.extra_args]
-        return Invocation(argv, stdin=req.prompt.encode("utf-8"))
+        return Invocation(argv, stdin=req.prompt.encode("utf-8"), temp_dirs=temp_dirs)
 
     def new_parser(self, req: RunRequest, model: str | None) -> ClaudeStreamParser:
         return ClaudeStreamParser(self.name, req, model)

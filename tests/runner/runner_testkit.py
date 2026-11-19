@@ -79,6 +79,12 @@ if record:
         "pid": os.getpid(),
         "pgid": os.getpgid(0),
         "env": {{k: os.environ.get(k) for k in spec.get("env_keys", [])}},
+        "env_names": sorted(os.environ),
+        "arg_files": {{
+            a: {{"text": open(a).read(), "mode": oct(os.stat(a).st_mode & 0o777),
+                 "dir_mode": oct(os.stat(os.path.dirname(a)).st_mode & 0o777)}}
+            for a in sys.argv[1:] if os.path.isfile(a)
+        }},
     }}
     with open(record, "w") as fh:
         json.dump(data, fh)

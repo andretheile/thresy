@@ -8,14 +8,12 @@ codex-rs/exec/src/exec_events.rs.
 from __future__ import annotations
 
 import asyncio
-import tomllib
 from pathlib import Path
 
-import pytest
-from runner_testkit import exit_info, fixture_lines, parse, request
-
 from thresy.runner import HarnessConfig, Progress, Started
-from thresy.runner.codex import CodexRunner, CodexStreamParser, toml_string
+from thresy.runner.codex import CodexRunner, CodexStreamParser
+
+from .runner_testkit import exit_info, fixture_lines, parse, request
 
 
 def parser(tmp_path: Path, **kw) -> CodexStreamParser:
@@ -105,12 +103,16 @@ def test_command_line_new_session(tmp_path):
 
 def test_command_line_resume_with_instructions(tmp_path):
     runner = CodexRunner(HarnessConfig(model_fast="gpt-fast", extra_args=("--ephemeral",)))
-    req = request(tmp_path, session_id="t-9", model_tier="fast", system_append='Say "hi".')
+    req = request(
+        tmp_path,
+        prompt="Wie war mein Lauf?",
+        session_id="t-9",
+        model_tier="fast",
+        system_append="Antworte kurz.",
+    )
     inv = runner.build_invocation(req, "codex", runner.model_for("fast"))
     assert inv.argv == [
         "codex",
-        "-c",
-        'developer_instructions="Say \\"hi\\"."',
         "exec",
         "--json",
         "--skip-git-repo-check",
@@ -124,27 +126,24 @@ def test_command_line_resume_with_instructions(tmp_path):
         "t-9",
         "-",
     ]
+    # Instructions travel with the prompt on stdin, never as an argument.
+    assert inv.stdin == b"Antworte kurz.\n\n---\n\nWie war mein Lauf?"
+    assert not any("Antworte" in arg or "Lauf" in arg for arg in inv.argv)
+    assert inv.temp_dirs == ()
 
 
 def test_models_default_to_cli_choice():
     assert CodexRunner().model_for("smart") is None
-    assert CodexRunner().capabilities.supports_system_append
+    assert not CodexRunner().capabilities.supports_system_append
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "plain",
-        'quotes " and \\ backslashes',
-        "multi\nline\ttabs\r\n",
-        "Umlaute äöü and emoji 🏃",
-        "control \x00\x01\x1f and del \x7f",
-        "true",
-        "[1, 2]",
-    ],
-)
-def test_toml_string_round_trip(text):
-    assert tomllib.loads(f"x = {toml_string(text)}")["x"] == text
+def test_turn_completed_is_terminal(tmp_path):
+    p = parser(tmp_path)
+    for line in fixture_lines("codex/codex_docs_sample.jsonl")[:-1]:
+        p.feed_line(line)
+    assert not p.terminal_seen
+    p.feed_line(fixture_lines("codex/codex_docs_sample.jsonl")[-1])
+    assert p.terminal_seen
 
 
 def test_healthcheck_login_status(tmp_path):

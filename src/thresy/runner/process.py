@@ -47,6 +47,9 @@ class ProcessExit:
     group_cleanup: bool = False
     """True if processes of the child's group had to be stopped after the
     child itself had exited (stray background processes)."""
+    lingered: bool = False
+    """True if the child was stopped because it did not exit within the time
+    given by ChildProcess.expect_exit() (its final result had already arrived)."""
 
 
 class ChildProcess:
@@ -82,11 +85,33 @@ class ChildProcess:
         self._stdin_task: asyncio.Task[None] | None = None
         self._timed_out = False
         self._cancelled = False
+        self._lingered = False
         self._overlong = 0
+        self._deadline = float("inf")
+        self._exit_deadline: float | None = None
 
     @property
     def pid(self) -> int | None:
         return self._proc.pid if self._proc else None
+
+    def expect_exit(self, within_s: float) -> None:
+        """The CLI has reported its final result: from now on it gets at most
+        `within_s` seconds to exit before `lines()` ends and the group is stopped."""
+        target = asyncio.get_running_loop().time() + max(within_s, 0.0)
+        if self._exit_deadline is None or target < self._exit_deadline:
+            self._exit_deadline = target
+
+    def _next_deadline(self) -> tuple[float, bool]:
+        """(absolute loop time, whether it is the exit deadline)."""
+        if self._exit_deadline is not None and self._exit_deadline < self._deadline:
+            return self._exit_deadline, True
+        return self._deadline, False
+
+    def _expired(self, is_exit_deadline: bool) -> None:
+        if is_exit_deadline:
+            self._lingered = True
+        else:
+            self._timed_out = True
 
     async def __aenter__(self) -> ChildProcess:
         try:
@@ -126,12 +151,12 @@ class ChildProcess:
         self, *, timeout_s: float, cancel: asyncio.Event | None = None
     ) -> AsyncIterator[str]:
         """Yield stdout lines (without newline) until EOF and process exit,
-        the deadline, or `cancel` being set. Afterwards `timed_out` or
-        `cancelled` tell which; the caller then leaves the context manager,
-        which stops the process group."""
+        the deadline, the exit deadline set by expect_exit(), or `cancel` being
+        set. Afterwards `timed_out`, `lingered` or `cancelled` tell which; the
+        caller then leaves the context manager, which stops the process group."""
         assert self._proc is not None and self._proc.stdout is not None
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + max(timeout_s, 0.0)
+        self._deadline = loop.time() + max(timeout_s, 0.0)
         cancel_task = loop.create_task(cancel.wait()) if cancel is not None else None
         read_task: asyncio.Task[bytes] | None = None
         buf = bytearray()
@@ -140,12 +165,13 @@ class ChildProcess:
             while True:
                 if read_task is None:
                     read_task = loop.create_task(self._proc.stdout.read(CHUNK_SIZE))
+                deadline, is_exit = self._next_deadline()
                 outcome = await _wait_first(read_task, cancel_task, deadline - loop.time())
                 if outcome == "cancel":
                     self._cancelled = True
                     return
                 if outcome == "timeout":
-                    self._timed_out = True
+                    self._expired(is_exit)
                     return
                 chunk = read_task.result()
                 read_task = None
@@ -178,6 +204,7 @@ class ChildProcess:
                     yield _decode(line)
             # stdout is closed; the process should exit now.
             wait_task = loop.create_task(self._proc.wait())
+            deadline, is_exit = self._next_deadline()
             try:
                 outcome = await _wait_first(wait_task, cancel_task, deadline - loop.time())
             finally:
@@ -186,7 +213,7 @@ class ChildProcess:
             if outcome == "cancel":
                 self._cancelled = True
             elif outcome == "timeout":
-                self._timed_out = True
+                self._expired(is_exit)
         finally:
             for task in (read_task, cancel_task):
                 if task is not None and not task.done():
@@ -199,6 +226,10 @@ class ChildProcess:
     @property
     def cancelled(self) -> bool:
         return self._cancelled
+
+    @property
+    def lingered(self) -> bool:
+        return self._lingered
 
     async def _finish(self) -> None:
         proc = self._proc
@@ -228,6 +259,7 @@ class ChildProcess:
             stderr=_decode(self._stderr_buf[-STDERR_TAIL_BYTES:]),
             overlong_lines=self._overlong,
             group_cleanup=group_cleanup,
+            lingered=self._lingered,
         )
 
     def _group_alive(self) -> bool:

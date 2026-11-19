@@ -7,8 +7,7 @@ reference) and the JSONL event definitions in the openai/codex repository
 
 Command line (prompt on stdin via "-", working directory = RunRequest.cwd):
 
-    codex [-c developer_instructions=<toml string>]
-          exec --json --skip-git-repo-check --cd <cwd>
+    codex exec --json --skip-git-repo-check --cd <cwd>
           [--model <model>]
           --dangerously-bypass-approvals-and-sandbox
           [extra args]
@@ -16,18 +15,30 @@ Command line (prompt on stdin via "-", working directory = RunRequest.cwd):
 
 All exec options come before the `resume` subcommand because some of them
 (--cd, --sandbox) are not global options of `codex exec`.
+
+RunRequest.system_append is prepended to the stdin prompt. Codex's
+`developer_instructions` setting can only be given as a `-c` argument (visible
+to every user on the host via `ps`), and its file setting
+`model_instructions_file` replaces the built-in instructions instead of adding
+to them.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections.abc import Mapping
 from typing import Any
 
 from .classify import classify_text, summarize_tool, truncate
-from .cli_base import CliRunner, Invocation, StreamParser, redact, usage_dict
+from .cli_base import (
+    CliRunner,
+    Invocation,
+    StreamParser,
+    prepend_system,
+    redact,
+    usage_dict,
+)
 from .core import Progress, RunEvent, RunnerCapabilities, RunRequest, RunResult, Started
 from .process import ProcessExit
 
@@ -66,6 +77,7 @@ class CodexStreamParser(StreamParser):
             return self._item(kind, item) if isinstance(item, dict) else []
         if kind == "turn.completed":
             self._completed = True
+            self.terminal_seen = True
             for key, value in (obj.get("usage") or {}).items():
                 if isinstance(value, int) and not isinstance(value, bool):
                     self._usage[key] = self._usage.get(key, 0) + value
@@ -73,6 +85,7 @@ class CodexStreamParser(StreamParser):
         if kind == "turn.failed":
             error = obj.get("error") or {}
             self._failed = str(error.get("message") or "turn failed")
+            self.terminal_seen = True
             return []
         if kind == "error":
             message = obj.get("message")
@@ -140,25 +153,26 @@ class CodexStreamParser(StreamParser):
 class CodexRunner(CliRunner):
     name = "codex"
     capabilities = RunnerCapabilities(
-        supports_resume=True, supports_streaming=True, supports_system_append=True
+        supports_resume=True, supports_streaming=True, supports_system_append=False
     )
     default_binaries = ("codex",)
     default_models: Mapping[str, str | None] = {}  # the CLI's configured default
     default_permission_args = ("--dangerously-bypass-approvals-and-sandbox",)
+    # Documented: CODEX_HOME, CODEX_API_KEY, CODEX_CA_CERTIFICATE, OPENAI_API_KEY.
+    env_names = frozenset({"OPENAI_API_KEY"})
+    env_prefixes = ("CODEX_",)
     verified = False
 
     def build_invocation(self, req: RunRequest, binary: str, model: str | None) -> Invocation:
-        argv = [binary]
-        if req.system_append:
-            argv += ["-c", f"developer_instructions={toml_string(req.system_append)}"]
-        argv += ["exec", "--json", "--skip-git-repo-check", "--cd", str(req.cwd)]
+        argv = [binary, "exec", "--json", "--skip-git-repo-check", "--cd", str(req.cwd)]
         if model:
             argv += ["--model", model]
         argv += [*self.permission_args, *self.config.extra_args]
         if req.session_id:
             argv += ["resume", req.session_id]
         argv.append("-")
-        return Invocation(argv, stdin=req.prompt.encode("utf-8"))
+        prompt = prepend_system(req.prompt, req.system_append)
+        return Invocation(argv, stdin=prompt.encode("utf-8"))
 
     def new_parser(self, req: RunRequest, model: str | None) -> CodexStreamParser:
         return CodexStreamParser(self.name, req, model)
@@ -176,11 +190,6 @@ class CodexRunner(CliRunner):
         if exit.returncode == 0:
             return True, message or "logged in", warnings
         return False, message or f"`codex login status` exited with {exit.returncode}", warnings
-
-
-def toml_string(text: str) -> str:
-    """Encode text as a TOML basic string (for `-c key=value` overrides)."""
-    return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _unwrap_shell(command: str) -> str:

@@ -27,6 +27,7 @@ from .core import (
     RunRequest,
     RunResult,
 )
+from .environment import allowed_environment
 from .handle import RunContext, RunHandle
 from .process import DEFAULT_GRACE_S, ChildProcess, ProcessExit, SpawnError, run_capture
 
@@ -41,12 +42,41 @@ MAX_DETAIL = 2000
 class Invocation:
     argv: list[str]
     stdin: bytes | None = None
+    temp_dirs: tuple[Path, ...] = ()
+    """Private temporary directories (for example a system-prompt file) that
+    are removed when the run is over."""
+
+    def cleanup(self) -> None:
+        for path in self.temp_dirs:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def private_file(content: str, name: str) -> tuple[Path, Path]:
+    """Write `content` to a new file only this user can read; returns (dir, file).
+
+    Used instead of command-line arguments, which every user on the host can
+    read via `ps`."""
+    directory = Path(tempfile.mkdtemp(prefix="thresy-runner-"))  # mode 0700
+    path = directory / name
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    return directory, path
+
+
+def prepend_system(prompt: str, system_append: str | None) -> str:
+    """The contract's fallback for harnesses without a usable system-prompt route."""
+    if not system_append or not system_append.strip():
+        return prompt
+    return f"{system_append.strip()}\n\n---\n\n{prompt}"
 
 
 class StreamParser(ABC):
     """Turns one run's stdout lines into events and, at the end, a RunResult.
 
-    Subclasses implement `feed` (one decoded JSON object) and `finish`.
+    Subclasses implement `feed` (one decoded JSON object) and `finish`, and set
+    `terminal_seen` once the harness has reported its final result, so the
+    runner stops waiting for a process that does not exit.
     """
 
     def __init__(self, runner: str, req: RunRequest, model: str | None) -> None:
@@ -56,6 +86,7 @@ class StreamParser(ABC):
         self.session_id: str | None = None
         self.last_text = ""
         self.cancel_reason: str | None = None
+        self.terminal_seen = False
         self.garbage: deque[str] = deque(maxlen=5)
         self.garbage_count = 0
 
@@ -109,9 +140,7 @@ class StreamParser(ABC):
         return self.result(ok=False, error_kind=kind, error_detail=detail, **kw)
 
     def cancelled_result(self, **kw: Any) -> RunResult:
-        reason = self.cancel_reason or "cancelled"
-        detail = reason if reason.startswith("cancelled") else f"cancelled: {reason}"
-        return self.error("other", detail, **kw)
+        return self.error("cancelled", self.cancel_reason or "cancelled", **kw)
 
     def failure_from_exit(self, exit: ProcessExit, *messages: str | None, **kw: Any) -> RunResult:
         """Result for a run that ended without a usable terminal event."""
@@ -152,6 +181,13 @@ class CliRunner(ABC):
     default_models: ClassVar[Mapping[str, str | None]] = {}
     default_permission_args: ClassVar[tuple[str, ...]] = ()
     base_env: ClassVar[Mapping[str, str]] = {}
+    """Fixed additions to the child environment."""
+    env_names: ClassVar[frozenset[str]] = frozenset()
+    env_prefixes: ClassVar[tuple[str, ...]] = ()
+    """Parent variables the harness reads for its own auth and configuration;
+    they pass the allow-list (see thresy.runner.environment)."""
+    env_blocked: ClassVar[frozenset[str]] = frozenset()
+    """Parent variables that never pass, even if a prefix matches."""
     verified: ClassVar[bool] = False
     """Whether this adapter has been run against the real CLI."""
 
@@ -170,8 +206,18 @@ class CliRunner(ABC):
     def model_for(self, tier: ModelTier) -> str | None:
         return self.config.model_for(tier, self.default_models)
 
-    def child_env(self, req: RunRequest | None = None) -> dict[str, str]:
-        env = dict(os.environ)
+    def child_env(
+        self, req: RunRequest | None = None, parent: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
+        """The CLI's environment: the allow-listed part of the parent
+        environment, then base_env, COACH_<NAME>_ENV and RunRequest.env."""
+        env = allowed_environment(
+            os.environ if parent is None else parent,
+            harness_names=self.env_names,
+            harness_prefixes=self.env_prefixes,
+            pass_through=self.config.pass_env,
+            blocked=self.env_blocked,
+        )
         env.update(self.base_env)
         env.update(self.config.env)
         if req is not None:
@@ -217,28 +263,37 @@ class CliRunner(ABC):
             return parser.error(
                 "other", f"{self.name} CLI not found (looked for {self.binary_names()})"
             )
-        inv = self.build_invocation(req, binary, model)
-        log.debug(
-            "%s: starting %s in %s",
-            self.name,
-            inv.argv[:-1] if inv.stdin is None else inv.argv,
-            cwd,
-        )
-        child = ChildProcess(
-            inv.argv, cwd=cwd, env=env, stdin_data=inv.stdin, grace_s=self.kill_grace_s
-        )
         try:
-            async with child:
-                lines = child.lines(timeout_s=req.timeout_s, cancel=ctx.cancel_event)
-                async with contextlib.aclosing(lines):
-                    async for line in lines:
-                        for event in parser.feed_line(line):
-                            ctx.emit(event)  # type: ignore[arg-type]
-        except SpawnError as exc:
-            return parser.error("other", f"could not start {self.name} CLI: {exc}")
+            inv = self.build_invocation(req, binary, model)
+        except OSError as exc:
+            return parser.error("other", f"could not prepare the {self.name} run: {exc}")
+        try:
+            log.debug("%s: starting %s in %s", self.name, inv.argv[0], cwd)
+            child = ChildProcess(
+                inv.argv, cwd=cwd, env=env, stdin_data=inv.stdin, grace_s=self.kill_grace_s
+            )
+            try:
+                async with child:
+                    lines = child.lines(timeout_s=req.timeout_s, cancel=ctx.cancel_event)
+                    async with contextlib.aclosing(lines):
+                        async for line in lines:
+                            for event in parser.feed_line(line):
+                                ctx.emit(event)  # type: ignore[arg-type]
+                            if parser.terminal_seen:
+                                child.expect_exit(self.config.exit_wait_s)
+            except SpawnError as exc:
+                return parser.error("other", f"could not start {self.name} CLI: {exc}")
+        finally:
+            inv.cleanup()
         assert child.exit is not None
         parser.cancel_reason = ctx.cancel_reason
-        if child.exit.group_cleanup:
+        if child.exit.lingered:
+            log.info(
+                "%s: the CLI did not exit within %gs of its final result; stopped it",
+                self.name,
+                self.config.exit_wait_s,
+            )
+        elif child.exit.group_cleanup:
             log.info("%s: stopped processes left behind by the CLI", self.name)
         return parser.finish(child.exit)
 
@@ -264,8 +319,9 @@ class CliRunner(ABC):
             auth_ok, auth_detail, warnings = None, f"auth check could not run: {exc}", []
         status = "auth ok" if auth_ok else ("auth unknown" if auth_ok is None else "auth problem")
         detail = f"{self.name} {version or '(version unknown)'}: {status}: {redact(auth_detail)}"
+        warnings = [*warnings, *self.static_warnings()]
         if not self.verified:
-            warnings = [*warnings, "adapter not yet verified against the real CLI"]
+            warnings.append("adapter not yet verified against the real CLI")
         return Health(
             runner=self.name,
             binary_found=True,
@@ -282,6 +338,10 @@ class CliRunner(ABC):
         self, binary: str, env: Mapping[str, str]
     ) -> tuple[bool | None, str, list[str]]:
         """Return (auth_ok, detail, warnings) without spending model usage."""
+
+    def static_warnings(self) -> list[str]:
+        """Warnings about the adapter itself, shown by every healthcheck."""
+        return []
 
     async def _version(self, binary: str, env: Mapping[str, str]) -> str | None:
         try:

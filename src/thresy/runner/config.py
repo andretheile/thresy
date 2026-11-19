@@ -10,6 +10,11 @@ Per harness NAME (CLAUDE, CODEX, CURSOR) the following variables are read:
     COACH_<NAME>_MODEL_SMART       model for the "smart" tier
                                    (unset: adapter default; empty: let the CLI choose)
     COACH_<NAME>_ENV               extra environment, shell-quoted KEY=VALUE pairs
+    COACH_<NAME>_PASS_ENV          names (or prefixes ending in *) of parent
+                                   variables the CLI may inherit beyond the
+                                   built-in allow-list, separated by spaces or commas
+    COACH_<NAME>_EXIT_WAIT_S       seconds the CLI gets to exit after its final
+                                   result before it is stopped (default 10)
 
 and COACH_RUNNER selects the default runner (claude, codex, cursor or fake).
 """
@@ -25,6 +30,7 @@ from .core import ModelTier
 
 RUNNER_NAMES: tuple[str, ...] = ("claude", "codex", "cursor", "fake")
 DEFAULT_RUNNER = "claude"
+DEFAULT_EXIT_WAIT_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,12 @@ class HarnessConfig:
     argument and let the CLI use its own default."""
     env: Mapping[str, str] = field(default_factory=dict)
     """Added to the child environment of every run (RunRequest.env wins)."""
+    pass_env: tuple[str, ...] = ()
+    """Parent variables the CLI may inherit beyond the built-in allow-list:
+    exact names, or prefixes ending in "*" (see thresy.runner.environment)."""
+    exit_wait_s: float = DEFAULT_EXIT_WAIT_S
+    """After the harness reported its final result, how long the CLI gets to
+    exit on its own before its process group is stopped."""
 
     def model_for(self, tier: ModelTier, defaults: Mapping[str, str | None]) -> str | None:
         configured = self.model_fast if tier == "fast" else self.model_smart
@@ -105,11 +117,25 @@ def _harness_from_env(env: Mapping[str, str], name: str) -> HarnessConfig:
         model_fast=_model(get("MODEL_FAST")),
         model_smart=_model(get("MODEL_SMART")),
         env=_parse_env_pairs(get("ENV"), prefix + "ENV"),
+        pass_env=tuple(_split((get("PASS_ENV") or "").replace(",", " "), prefix + "PASS_ENV")),
+        exit_wait_s=_seconds(get("EXIT_WAIT_S"), prefix + "EXIT_WAIT_S"),
     )
 
 
 def _model(value: str | None) -> str | None:
     return None if value is None else value.strip()
+
+
+def _seconds(value: str | None, var: str) -> float:
+    if value is None or not value.strip():
+        return DEFAULT_EXIT_WAIT_S
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{var}: expected a number of seconds, got {value!r}") from exc
+    if seconds < 0:
+        raise ValueError(f"{var}: must not be negative")
+    return seconds
 
 
 def _split(value: str | None, var: str) -> list[str]:

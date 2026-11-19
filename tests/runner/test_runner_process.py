@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from runner_testkit import (
+
+from thresy.runner import Final, HarnessConfig, Progress, RunEvent, RunRequest, Started
+from thresy.runner import process as process_mod
+from thresy.runner.cli_base import CliRunner, Invocation, StreamParser
+from thresy.runner.core import RunnerCapabilities
+from thresy.runner.environment import allowed_environment
+from thresy.runner.process import ChildProcess, ProcessExit
+
+from .runner_testkit import (
     collect,
     group_alive,
     pid_alive,
@@ -24,12 +32,6 @@ from runner_testkit import (
     wait_until,
     write_fake_cli,
 )
-
-from thresy.runner import Final, HarnessConfig, Progress, RunEvent, RunRequest, Started
-from thresy.runner import process as process_mod
-from thresy.runner.cli_base import CliRunner, Invocation, StreamParser
-from thresy.runner.core import RunnerCapabilities
-from thresy.runner.process import ChildProcess, ProcessExit
 
 GRACE = 0.3
 
@@ -50,6 +52,7 @@ class LineParser(StreamParser):
             return [Progress("text", obj["text"])]
         if "result" in obj:
             self.final = obj["result"]
+            self.terminal_seen = True
         return []
 
     def finish(self, exit: ProcessExit):
@@ -72,16 +75,21 @@ class LineRunner(CliRunner):
         return LineParser(self.name, req, model)
 
     async def check_auth(self, binary, env):
+        self.auth_env = dict(env)
         return True, "ok", []
 
 
-def make(tmp_path: Path, **spec: Any) -> tuple[LineRunner, Path]:
+def make(
+    tmp_path: Path, config: dict[str, Any] | None = None, **spec: Any
+) -> tuple[LineRunner, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     record = tmp_path / "record.json"
     spec.setdefault("record", str(record))
-    config = HarnessConfig(binary=str(write_fake_cli(bin_dir)), env=spec_env(**spec))
-    return LineRunner(config, kill_grace_s=GRACE), record
+    harness = HarnessConfig(
+        binary=str(write_fake_cli(bin_dir)), env=spec_env(**spec), **(config or {})
+    )
+    return LineRunner(harness, kill_grace_s=GRACE), record
 
 
 def req(tmp_path: Path, **kw: Any) -> RunRequest:
@@ -191,8 +199,8 @@ def test_cancel_via_handle(tmp_path):
     events = asyncio.run(scenario())
     assert len([e for e in events if isinstance(e, Final)]) == 1
     result = events[-1].result
-    assert result.error_kind == "other"
-    assert result.error_detail == "cancelled: user said stop"
+    assert result.error_kind == "cancelled"
+    assert result.error_detail == "user said stop"
     assert result.session_id == "s-6"
     assert_group_gone(record, int(grandchild.read_text()))
 
@@ -289,14 +297,143 @@ def test_leftover_processes_after_exit_are_stopped(tmp_path):
 
 def test_result_then_stdout_held_open(tmp_path):
     # A background process keeps stdout open after the CLI exits: the run ends
-    # at the timeout, keeps the answer, and the group is stopped.
+    # shortly after the result (not at the timeout), keeps the answer, and the
+    # group is stopped.
     grandchild = tmp_path / "grandchild.pid"
     runner, record = make(
-        tmp_path, steps=[{"spawn": str(grandchild), "hold_stdout": True}, out(result="answer")]
+        tmp_path,
+        config={"exit_wait_s": 0.5},
+        steps=[{"spawn": str(grandchild), "hold_stdout": True}, out(result="answer")],
     )
-    _, result = run_collect(runner.run(req(tmp_path, timeout_s=1.0)))
+    start = time.monotonic()
+    _, result = run_collect(runner.run(req(tmp_path, timeout_s=120)))
+    assert time.monotonic() - start < 10
     assert result.ok and result.text == "answer"
     assert_group_gone(record, int(grandchild.read_text()))
+
+
+def test_result_then_hang_returns_the_answer_quickly(tmp_path):
+    grandchild = tmp_path / "grandchild.pid"
+    runner, record = make(
+        tmp_path,
+        config={"exit_wait_s": 0.5},
+        steps=[
+            {"spawn": str(grandchild)},
+            out(session="s-11"),
+            out(text="Easy run today."),
+            out(result="Easy run today."),
+            {"sleep": 600},
+        ],
+    )
+    start = time.monotonic()
+    events, result = run_collect(runner.run(req(tmp_path, timeout_s=120)))
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.5 + 2 * GRACE + 5  # exit wait + SIGINT/SIGTERM grace + slack
+    assert result.ok and result.text == "Easy run today." and result.session_id == "s-11"
+    assert [type(e) for e in events] == [Started, Progress, Final]
+    assert_group_gone(record, int(grandchild.read_text()))
+
+
+def test_result_then_clean_exit_is_not_cut_short(tmp_path):
+    # Output after the result still counts while the CLI exits within the wait.
+    runner, _ = make(
+        tmp_path,
+        config={"exit_wait_s": 5},
+        steps=[out(result="first"), {"sleep": 0.3}, out(text="late text"), out(result="last")],
+    )
+    events, result = run_collect(runner.run(req(tmp_path)))
+    assert result.ok and result.text == "last"
+    assert Progress("text", "late text") in events
+
+
+def test_exit_wait_never_extends_the_timeout(tmp_path):
+    runner, _ = make(tmp_path, config={"exit_wait_s": 60}, steps=[out(result="x"), {"sleep": 600}])
+    start = time.monotonic()
+    _, result = run_collect(runner.run(req(tmp_path, timeout_s=0.5)))
+    assert time.monotonic() - start < 8
+    assert result.ok  # the result had arrived; the timeout only stopped the process
+
+
+# -- environment ------------------------------------------------------------------
+
+
+def test_child_environment_is_allow_listed(tmp_path, monkeypatch):
+    monkeypatch.setenv("COACH_TELEGRAM_TOKEN", "secret-telegram")
+    monkeypatch.setenv("COACH_DATABASE_URL", "postgresql://app:secret@db/coach")
+    monkeypatch.setenv("SOME_SERVICE_SECRET", "secret")
+    monkeypatch.setenv("MY_PASSED_VAR", "passed-by-name")
+    monkeypatch.setenv("TEAM_A", "passed-by-prefix")
+    monkeypatch.setenv("TEAM_B", "passed-by-prefix-too")
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    keys = [
+        "COACH_TELEGRAM_TOKEN",
+        "COACH_DATABASE_URL",
+        "SOME_SERVICE_SECRET",
+        "MY_PASSED_VAR",
+        "TEAM_A",
+        "TEAM_B",
+        "LC_ALL",
+        "PATH",
+        "HOME",
+        "FROM_REQUEST",
+    ]
+    runner, record = make(
+        tmp_path,
+        config={"pass_env": ("MY_PASSED_VAR", "TEAM_*")},
+        env_keys=keys,
+        steps=[out(result="ok")],
+    )
+    _, result = run_collect(runner.run(req(tmp_path, env={"FROM_REQUEST": "r"})))
+    assert result.ok
+    seen = read_json(record)["env"]
+    assert seen["COACH_TELEGRAM_TOKEN"] is None
+    assert seen["COACH_DATABASE_URL"] is None
+    assert seen["SOME_SERVICE_SECRET"] is None
+    assert seen["MY_PASSED_VAR"] == "passed-by-name"
+    assert seen["TEAM_A"] == "passed-by-prefix" and seen["TEAM_B"] == "passed-by-prefix-too"
+    assert seen["LC_ALL"] == "C.UTF-8"
+    assert seen["PATH"] == os.environ["PATH"] and seen["HOME"] == os.environ["HOME"]
+    assert seen["FROM_REQUEST"] == "r"
+
+
+def test_healthcheck_uses_the_same_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("COACH_TELEGRAM_TOKEN", "secret-telegram")
+    monkeypatch.setenv("MY_PASSED_VAR", "yes")
+    runner, _ = make(tmp_path, config={"pass_env": ("MY_PASSED_VAR",)})
+    asyncio.run(runner.healthcheck())
+    assert "COACH_TELEGRAM_TOKEN" not in runner.auth_env
+    assert runner.auth_env["MY_PASSED_VAR"] == "yes"
+    assert runner.auth_env == runner.child_env()
+
+
+def test_allowed_environment_rules():
+    parent = {
+        "PATH": "/bin",
+        "XDG_CONFIG_HOME": "/x",
+        "https_proxy": "http://proxy",
+        "SSL_CERT_FILE": "/ca.pem",
+        "CLAUDE_CODE_OAUTH_TOKEN": "t",
+        "CLAUDE_CODE_SIMPLE": "1",
+        "ANTHROPIC_API_KEY": "k",
+        "COACH_CLAUDE_BIN": "/opt/claude",
+        "COACH_X": "explicit",
+        "AWS_SECRET_ACCESS_KEY": "s",
+    }
+    env = allowed_environment(
+        parent,
+        harness_prefixes=("ANTHROPIC_", "CLAUDE_", "COACH_"),
+        blocked=("CLAUDE_CODE_SIMPLE",),
+        pass_through=("COACH_X",),
+    )
+    assert env == {
+        "PATH": "/bin",
+        "XDG_CONFIG_HOME": "/x",
+        "https_proxy": "http://proxy",
+        "SSL_CERT_FILE": "/ca.pem",
+        "CLAUDE_CODE_OAUTH_TOKEN": "t",
+        "ANTHROPIC_API_KEY": "k",
+        "COACH_X": "explicit",  # COACH_* only when listed explicitly
+    }
 
 
 def test_missing_binary(tmp_path):
