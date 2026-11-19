@@ -103,10 +103,7 @@ def export(tmp_path) -> Path:
 def _snapshot(conn) -> dict[str, list[dict]]:
     tables = ("activities", "activity_records", "activity_laps", "wellness_daily",
               "sleep_levels", "hrv_readings", "personal_records", "events")  # fmt: skip
-    return {
-        t: conn.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()  # noqa: S608
-        for t in tables
-    }
+    return {t: conn.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall() for t in tables}
 
 
 def test_report_payloads_key_by_own_calendar_date() -> None:
