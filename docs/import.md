@@ -90,8 +90,15 @@ compare personal records.
 
 ## Size and duration
 
-Parsing dominates: about one FIT file per second on a laptop (fitparse is pure Python), so an
-export with 470 FIT files takes 8 to 10 minutes; summaries, wellness and records together take
-a few seconds. A second run takes a few seconds. Per FIT file the database grows by roughly
-0.5 MB (records, laps and the primary-key index), and the FIT copies take as much space as the
-files in `tracks/`.
+Parsing dominates: fitparse is pure Python and reads about 5,000 records (seconds of
+activity) per second on a laptop core, so the time is roughly the total recorded time of all
+FIT files divided by 5,000 — about 6 minutes per 500 hours of activities, more on a slow or
+busy server. Storing the records (COPY), the summaries, the wellness reports and the personal
+records take seconds. A second run takes a few seconds.
+
+The records table needs about 140 bytes per record including its primary-key index (about
+0.5 MB per hour of activity); summaries with their raw payloads about 6.5 kB per activity;
+wellness about 70 kB per day. The FIT copies take as much space as the files in `tracks/`.
+Check the number of records first with
+`python -c "import pyarrow.parquet as pq, glob; print(sum(pq.ParquetFile(f).metadata.num_rows for f in glob.glob('legacy/timeseries/year=*/*.parquet')))"`
+when the export has the old bot's Parquet files.

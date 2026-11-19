@@ -32,7 +32,7 @@ Conventions shared by every command:
 
 ```sh
 coach analysis list --days 14
-coach analysis list --name parkrun --limit 50 --json
+coach analysis list --name tempo --limit 50 --json
 coach analysis list --type track_running --with-records
 ```
 
