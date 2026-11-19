@@ -1,4 +1,4 @@
-# Laufcoach architecture
+# Thresy architecture
 
 This document is the contract that every work package implements against. If you need to deviate from it, say so in your final report and explain why. Do not silently change a contract another package depends on.
 
@@ -12,7 +12,7 @@ Code, comments and docs are in English. The language the coach speaks is a deplo
 
 ## Principles
 
-1. **Harness-agnostic.** The agent is whichever coding CLI is configured: Claude Code (the default), Codex, or Cursor. Nothing outside `src/laufcoach/runner/` may depend on a specific harness. That means:
+1. **Harness-agnostic.** The agent is whichever coding CLI is configured: Claude Code (the default), Codex, or Cursor. Nothing outside `src/thresy/runner/` may depend on a specific harness. That means:
    - Capabilities are plain CLI commands (`coach …`), not MCP servers or harness-specific tools.
    - Agent instructions live in `AGENTS.md`. `CLAUDE.md` contains only `@AGENTS.md`.
    - Memory is files in the coach workspace plus Postgres, never a harness's own memory feature.
@@ -20,21 +20,21 @@ Code, comments and docs are in English. The language the coach speaks is a deplo
 2. **Transport-agnostic.** Telegram is the first transport. A private web page comes later. The agent never calls Telegram; it writes to the `outbox` table and a transport delivers.
 3. **Deterministic sync, LLM on demand.** Syncing Garmin data never involves the LLM. The sync poller writes rows and raises `events`; the bridge decides which events start an agent run.
 4. **Postgres is the single store.** No SQLite, Parquet or DuckDB. Raw Garmin payloads are kept as `jsonb` so derived columns can be recomputed.
-5. **Open-source ready: nothing athlete-specific in git.** `legacy/` and `private/` are ignored. Everything that belongs to one athlete comes from configuration, the database, or `private/`: names, places, coordinates, segment definitions, race lists, paces, heart-rate values, memory files, Garmin activity ids. None of it may appear in code, tests, docs, fixtures or commit messages. Fixtures in the repo are synthetic. Tests that need real data read it from `LAUFCOACH_LEGACY_DIR`, pick their inputs dynamically (for example "the first three FIT files"), compare against the legacy store rather than against hard-coded numbers, and skip when the directory is unset or missing.
+5. **Open-source ready: nothing athlete-specific in git.** `legacy/` and `private/` are ignored. Everything that belongs to one athlete comes from configuration, the database, or `private/`: names, places, coordinates, segment definitions, race lists, paces, heart-rate values, memory files, Garmin activity ids. None of it may appear in code, tests, docs, fixtures or commit messages. Fixtures in the repo are synthetic. Tests that need real data read it from `COACH_LEGACY_DIR`, pick their inputs dynamically (for example "the first three FIT files"), compare against the legacy store rather than against hard-coded numbers, and skip when the directory is unset or missing.
 6. **Subscription auth.** With Claude Code the model is reached through the subscription token (`CLAUDE_CODE_OAUTH_TOKEN`). Never pass `--bare` (bare mode ignores that token).
 
 ## Components
 
 | Component | Package | Role |
 |---|---|---|
-| Core | `laufcoach.config`, `laufcoach.db`, `laufcoach.migrate`, `laufcoach.fit`, `laufcoach.store` | Settings, connections, migrations, FIT parsing, upserts |
-| Legacy import | `laufcoach.importer` | One-off import of `legacy/` into Postgres |
-| Garmin sync | `laufcoach.garmin`, `laufcoach.sync` | Auth, polling, wellness and activity ingest, events |
-| Analysis | `laufcoach.analysis` | Segments, intervals, plots |
-| Runner | `laufcoach.runner` | One interface over Claude Code, Codex and Cursor CLIs |
-| Transport | `laufcoach.transport` | Telegram now, web later |
-| Bridge | `laufcoach.bridge` | Chat loop, sessions, event dispatcher, outbox delivery |
-| Tools | `laufcoach.tools` | Weather, calendar, routes, `coach send` |
+| Core | `thresy.config`, `thresy.db`, `thresy.migrate`, `thresy.fit`, `thresy.store` | Settings, connections, migrations, FIT parsing, upserts |
+| Legacy import | `thresy.importer` | One-off import of `legacy/` into Postgres |
+| Garmin sync | `thresy.garmin`, `thresy.sync` | Auth, polling, wellness and activity ingest, events |
+| Analysis | `thresy.analysis` | Segments, intervals, plots |
+| Runner | `thresy.runner` | One interface over Claude Code, Codex and Cursor CLIs |
+| Transport | `thresy.transport` | Telegram now, web later |
+| Bridge | `thresy.bridge` | Chat loop, sessions, event dispatcher, outbox delivery |
+| Tools | `thresy.tools` | Weather, calendar, routes, `coach send` |
 | Coach workspace | `workspace/` | Template of the directory the agent runs in: `AGENTS.md`, playbooks, memory skeleton |
 
 ## Repository layout
@@ -43,7 +43,7 @@ Code, comments and docs are in English. The language the coach speaks is a deplo
 AGENTS.md  CLAUDE.md  README.md  pyproject.toml  uv.lock
 docs/            architecture and per-package notes
 migrations/      NNNN_name.sql, applied in order
-src/laufcoach/   the Python package (see Components)
+src/thresy/      the Python package (see Components)
 tests/           pytest; tests/<package>/ mirrors src
 workspace/       coach workspace template
 docker/          Dockerfile(s)
@@ -272,7 +272,7 @@ The sync poller inserts; the bridge consumes and sets `processed_at`. `dedupe_ke
 
 ## Runner contract
 
-`laufcoach.runner` hides the coding CLI. Standard library only.
+`thresy.runner` hides the coding CLI. Standard library only.
 
 ```python
 @dataclass(frozen=True)
@@ -333,7 +333,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## Configuration
 
-`COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_DATA_DIR` (FIT files, plots), `COACH_WORKSPACE_DIR`, `COACH_TZ` (default `UTC`), `COACH_LANGUAGE` (default `en`), `COACH_RUNNER` (default `claude`), `COACH_TELEGRAM_TOKEN`, `COACH_TELEGRAM_CHAT_IDS`, plus runner-specific settings. `LAUFCOACH_LEGACY_DIR` points tests and the importer at the old export.
+`COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_DATA_DIR` (FIT files, plots), `COACH_WORKSPACE_DIR`, `COACH_TZ` (default `UTC`), `COACH_LANGUAGE` (default `en`), `COACH_NAME` (default `Thresy`, the name the coach uses for itself), `COACH_RUNNER` (default `claude`), `COACH_TELEGRAM_TOKEN`, `COACH_TELEGRAM_CHAT_IDS`, plus runner-specific settings. `COACH_LEGACY_DIR` points tests and the importer at the old export.
 
 ## Deployment
 
