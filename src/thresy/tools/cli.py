@@ -83,7 +83,7 @@ def _queue(
         raise fail(str(exc), as_json=json_out) from exc
     except ConfigError as exc:
         raise fail(str(exc), as_json=json_out) from exc
-    except psycopg.errors.InsufficientPrivilege as exc:
+    except (psycopg.errors.InsufficientPrivilege, psycopg.errors.ReadOnlySqlTransaction) as exc:
         raise fail(
             "this database role may not queue messages (permission denied on the outbox table)",
             as_json=json_out,
