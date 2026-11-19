@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import warnings
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,6 +41,7 @@ from telegram.error import (
     TelegramError,
 )
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, TypeHandler
+from telegram.warnings import PTBDeprecationWarning
 
 from thresy.transport.base import (
     MAX_DOCUMENT_BYTES,
@@ -76,9 +78,16 @@ def _seconds(value: Any) -> float:
         return 5.0
 
 
+def _period(obj: Any, attr: str) -> Any:
+    """Read a time-period attribute (int or timedelta, depending on PTB_TIMEDELTA) without
+    python-telegram-bot's deprecation warning about the int form."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PTBDeprecationWarning)
+        return getattr(obj, attr)
+
+
 def _retry_after_s(exc: RetryAfter) -> float:
-    # The private timedelta avoids the deprecation warning of the int-valued property.
-    return _seconds(getattr(exc, "_retry_after", None) or exc.retry_after)
+    return _seconds(_period(exc, "retry_after"))
 
 
 def classify_error(exc: TelegramError) -> DeliveryError:
@@ -438,7 +447,7 @@ class TelegramTransport:
                 message,
                 "voice.ogg",
                 voice.mime_type,
-                duration=voice.duration,
+                duration=_period(voice, "duration"),
             )
             return InboundMessage(kind="voice", text=caption, attachments=(att,), **base)
         if message.audio is not None:
@@ -450,7 +459,7 @@ class TelegramTransport:
                 message,
                 audio.file_name or "audio",
                 audio.mime_type,
-                duration=audio.duration,
+                duration=_period(audio, "duration"),
             )
             return InboundMessage(kind="audio", text=caption, attachments=(att,), **base)
         log.info("telegram: ignored a message of an unsupported type in chat %s", chat_id)
