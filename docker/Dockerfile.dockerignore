@@ -1,0 +1,13 @@
+# Build context for docker/Dockerfile: only what the image needs. In particular legacy/,
+# private/, .env and local virtual environments must never reach the build.
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!LICENSE
+!src/
+!migrations/
+!docker/install-agent.sh
+**/__pycache__
+**/*.pyc
