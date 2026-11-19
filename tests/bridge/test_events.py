@@ -311,10 +311,30 @@ def test_problem_notifications_are_plain_and_rate_limited(make_harness) -> None:
     asyncio.run(scenario())
 
 
-def test_sync_failures_notify_only_when_persistent(make_harness) -> None:
+def test_sync_failure_notification_names_the_last_good_sync(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(bridge={"bridge_briefing": False}) as h:
+            # As thresy.sync.state records it.
+            last = local(2030, 1, 2, 6, 40).astimezone(UTC).isoformat()
+            h.conn.execute(
+                "INSERT INTO sync_state (key, value) VALUES ('sync_status', %s)",
+                (json.dumps({"last_success_at": last, "consecutive_failures": 3}),),
+            )
+            add_event(h, "sync_failed", {"error": "HTTP 503"})
+            await h.tick()
+            assert h.transport.texts == [
+                "Garmin sync is failing: no successful sync since 06:40. New data may be missing"
+                " until it works again.\nLast error: HTTP 503"
+            ]
+
+    asyncio.run(scenario())
+
+
+def test_sync_failure_threshold_and_rate_limit(make_harness) -> None:
     async def scenario() -> None:
         async with make_harness(
-            settings={"language": "de"}, bridge={"bridge_briefing": False}
+            settings={"language": "de"},
+            bridge={"bridge_briefing": False, "bridge_sync_failed_threshold": 2},
         ) as h:
             one = add_event(h, "sync_failed", {"error": "HTTP 503"})
             await h.tick()
@@ -325,7 +345,7 @@ def test_sync_failures_notify_only_when_persistent(make_harness) -> None:
             await h.tick()
             assert len(h.transport.texts) == 1
             text = h.transport.texts[0]
-            assert "seit 08:00 2-mal fehlgeschlagen" in text and "HTTP 503" in text
+            assert "kein erfolgreicher Sync seit unbekannt" in text and "HTTP 503" in text
             h.clock.advance(hours=1)
             add_event(h, "sync_failed", {"error": "HTTP 503"})
             await h.tick()

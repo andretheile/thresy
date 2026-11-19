@@ -332,6 +332,20 @@ class EventDispatcher:
             return False
         return now - last < timedelta(hours=self.bs.bridge_notify_interval_h)
 
+    async def _last_good_sync(self, event: Row, now: datetime) -> str:
+        """When the sync last succeeded (its ``sync_status`` record), as local time."""
+        status = (await self.repo.sync_status()).get("sync_status")
+        value = status.get("last_success_at") if isinstance(status, dict) else None
+        try:
+            moment = datetime.fromisoformat(value) if isinstance(value, str) else None
+        except ValueError:
+            moment = None
+        if moment is None or moment.tzinfo is None:
+            return t(self.settings.language, "unknown")
+        local = moment.astimezone(self.env.zone)
+        same_day = local.date() == now.astimezone(self.env.zone).date()
+        return local.strftime("%H:%M" if same_day else "%Y-%m-%d %H:%M")
+
     async def _notify_problem(self, event: Row, now: datetime) -> None:
         kind = event["kind"]
         payload = event.get("payload") or {}
@@ -355,8 +369,7 @@ class EventDispatcher:
             if int(stats["n"]) < self.bs.bridge_sync_failed_threshold:
                 await self._mark([event["id"]], "below-threshold")
                 return
-            since = (stats["first"] or event["ts"]).astimezone(self.env.zone)
-            text = t(lang, "sync_failed", count=int(stats["n"]), since=since.strftime("%H:%M"))
+            text = t(lang, "sync_failed", since=await self._last_good_sync(event, now))
             reason = payload.get("error")
         if reason:
             text += "\n" + t(lang, "last_error", error=" ".join(str(reason).split())[:200])

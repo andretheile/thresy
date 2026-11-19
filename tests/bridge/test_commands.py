@@ -54,9 +54,16 @@ def test_status_answers_while_a_run_is_in_progress(make_harness) -> None:
         runner = GatedRunner(lambda req: [Progress("text", "done")])
         runner.cost_usd = 0.25
         async with make_harness(runner) as h:
+            # As thresy.sync.state records it.
+            sync_status = {
+                "last_success_at": h.clock.now().isoformat(),
+                "consecutive_failures": 2,
+                "last_error": "Garmin request failed: 503",
+            }
             h.conn.execute(
-                "INSERT INTO sync_state (key, value) VALUES ('last_success', %s)",
-                (json.dumps(h.clock.now().replace(minute=0).isoformat()),),
+                "INSERT INTO sync_state (key, value) VALUES ('sync_status', %s),"
+                " ('garmin_auth', %s)",
+                (json.dumps(sync_status), json.dumps({"status": "login_paused"})),
             )
             await h.say("a question")
             await asyncio.wait_for(runner.started.wait(), 5)
@@ -67,6 +74,8 @@ def test_status_answers_while_a_run_is_in_progress(make_harness) -> None:
             assert status.startswith("**Status**")
             assert "Last successful sync: 2030-01-02 08:00 (0 min)" in status
             assert "Newest data: activity none, sleep none" in status
+            assert "Sync failing, passes in a row: 2× – Garmin request failed: 503" in status
+            assert "Garmin login: login_paused" in status
             assert "Agent (fake): ok – fake runner (no CLI)" in status
             assert "Agent runs today: 1, cost –" in status
             assert "Outbox: 0 waiting, 0 failed today" in status

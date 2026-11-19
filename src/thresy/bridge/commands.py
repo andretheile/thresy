@@ -103,8 +103,6 @@ class Commands:
 
     @staticmethod
     def _parse_time(value: Any) -> datetime | None:
-        if isinstance(value, dict):
-            value = value.get("at") or value.get("ts") or value.get("time")
         if isinstance(value, str):
             try:
                 parsed = datetime.fromisoformat(value)
@@ -113,16 +111,12 @@ class Commands:
             return parsed if parsed.tzinfo else None
         return None
 
-    async def status_text(self, chat_id: str) -> str:
+    def _sync_lines(self, sync: dict[str, Any]) -> list[str]:
         lang = self.lang
-        zone = self.service.prompt_env.zone
-        now = self.clock.now()
-        local = now.astimezone(zone)
-        midnight = datetime.combine(local.date(), datetime.min.time(), tzinfo=zone)
-        lines = [f"**{t(lang, 'status_title')}**"]
-
-        sync = await self.repo.sync_status()
-        last_success = self._parse_time(sync.get("last_success"))
+        status = sync.get("sync_status") if isinstance(sync.get("sync_status"), dict) else {}
+        auth = sync.get("garmin_auth") if isinstance(sync.get("garmin_auth"), dict) else {}
+        lines = []
+        last_success = self._parse_time(status.get("last_success_at"))
         if last_success is not None:
             lines.append(t(lang, "status_sync", value=self._when(last_success)))
         else:
@@ -137,15 +131,24 @@ class Commands:
                 sleep=sync["newest_sleep"] or t(lang, "none"),
             )
         )
-        problem = await self.repo.latest_unprocessed_problem()
-        if problem is not None and now - problem["ts"] < timedelta(hours=24):
-            lines.append(
-                t(
-                    lang,
-                    "status_sync_problem",
-                    value=f"{problem['kind']}, {self._when(problem['ts'])}",
-                )
-            )
+        failures = int(status.get("consecutive_failures") or 0)
+        if failures:
+            error = " ".join(str(status.get("last_error") or "").split())[:200]
+            value = f"{failures}× – {error}" if error else f"{failures}×"
+            lines.append(t(lang, "status_sync_problem", value=value))
+        if auth.get("status") and auth.get("status") != "ok":
+            lines.append(t(lang, "status_garmin_login", value=auth["status"]))
+        return lines
+
+    async def status_text(self, chat_id: str) -> str:
+        lang = self.lang
+        zone = self.service.prompt_env.zone
+        now = self.clock.now()
+        local = now.astimezone(zone)
+        midnight = datetime.combine(local.date(), datetime.min.time(), tzinfo=zone)
+        lines = [f"**{t(lang, 'status_title')}**"]
+
+        lines += self._sync_lines(await self.repo.sync_status())
 
         try:
             health = await asyncio.wait_for(self.runner.healthcheck(), timeout=30)

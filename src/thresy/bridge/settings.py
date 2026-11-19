@@ -100,8 +100,10 @@ class BridgeSettings(BaseSettings):
 
     bridge_notify_interval_h: float = 12
     """At most one notification per kind (Garmin login, sync failures) in this many hours."""
-    bridge_sync_failed_threshold: int = 2
-    """Notify about sync failures only after this many within ``bridge_sync_failed_window_h``."""
+    bridge_sync_failed_threshold: int = 1
+    """Notify about sync failures only after this many ``sync_failed`` events within
+    ``bridge_sync_failed_window_h``. The sync raises one only after several failed passes in a
+    row (``COACH_SYNC_FAIL_EVENT_AFTER``), so 1 already ignores one-off blips."""
     bridge_sync_failed_window_h: float = 6
 
     bridge_run_timeout_s: float = 900

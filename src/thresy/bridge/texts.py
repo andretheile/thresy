@@ -41,8 +41,8 @@ TEXTS: dict[str, dict[str, str]] = {
             " new data arrives. The owner needs to log in again (coach sync login)."
         ),
         "sync_failed": (
-            "Garmin sync has failed {count} times since {since}. New data may be missing until"
-            " it works again."
+            "Garmin sync is failing: no successful sync since {since}. New data may be missing"
+            " until it works again."
         ),
         "last_error": "Last error: {error}",
         # Chat commands.
@@ -73,7 +73,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "status_sync": "Last successful sync: {value}",
         "status_sync_activity": "Last sync activity: {value}",
         "status_data": "Newest data: activity {activity}, sleep {sleep}",
-        "status_sync_problem": "Unhandled sync problem: {value}",
+        "status_sync_problem": "Sync failing, passes in a row: {value}",
+        "status_garmin_login": "Garmin login: {value}",
         "status_runner": "Agent ({runner}): {value}",
         "status_runs": "Agent runs today: {count}, cost {cost}",
         "status_outbox": "Outbox: {pending} waiting, {failed} failed today",
@@ -134,8 +135,8 @@ TEXTS: dict[str, dict[str, str]] = {
             " anmelden (coach sync login)."
         ),
         "sync_failed": (
-            "Der Garmin-Sync ist seit {since} {count}-mal fehlgeschlagen. Neue Daten können"
-            " fehlen, bis er wieder läuft."
+            "Der Garmin-Sync schlägt fehl: kein erfolgreicher Sync seit {since}. Neue Daten"
+            " können fehlen, bis er wieder läuft."
         ),
         "last_error": "Letzter Fehler: {error}",
         "help": (
@@ -166,7 +167,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "status_sync": "Letzter erfolgreicher Sync: {value}",
         "status_sync_activity": "Letzte Sync-Aktivität: {value}",
         "status_data": "Neueste Daten: Aktivität {activity}, Schlaf {sleep}",
-        "status_sync_problem": "Offenes Sync-Problem: {value}",
+        "status_sync_problem": "Sync schlägt fehl, Durchläufe in Folge: {value}",
+        "status_garmin_login": "Garmin-Anmeldung: {value}",
         "status_runner": "Agent ({runner}): {value}",
         "status_runs": "Agent-Läufe heute: {count}, Kosten {cost}",
         "status_outbox": "Ausgang: {pending} wartend, {failed} heute fehlgeschlagen",

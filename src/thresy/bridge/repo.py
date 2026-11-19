@@ -372,12 +372,6 @@ class Repo:
         assert row is not None
         return row
 
-    async def latest_unprocessed_problem(self) -> Row | None:
-        return await self._one(
-            "SELECT kind, ts FROM events WHERE kind IN ('garmin_auth_required', 'sync_failed')"
-            " ORDER BY id DESC LIMIT 1"
-        )
-
     # -- state -----------------------------------------------------------------------------------
 
     async def get_state(self, key: str) -> Any:
@@ -392,10 +386,12 @@ class Repo:
         )
 
     async def sync_status(self) -> Row:
-        """What /status can say about the sync service without knowing its internals."""
+        """What /status shows about the sync: its ``sync_status`` and ``garmin_auth`` records
+        (see thresy.sync.state), plus the newest data actually stored."""
         row = await self._one(
             "SELECT"
-            " (SELECT value FROM sync_state WHERE key = 'last_success') AS last_success,"
+            " (SELECT value FROM sync_state WHERE key = 'sync_status') AS sync_status,"
+            " (SELECT value FROM sync_state WHERE key = 'garmin_auth') AS garmin_auth,"
             " (SELECT max(updated_at) FROM sync_state WHERE key NOT LIKE 'bridge:%')"
             "   AS last_state_change,"
             " (SELECT max(local_date) FROM activities) AS newest_activity,"
