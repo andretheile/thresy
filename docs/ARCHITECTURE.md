@@ -74,6 +74,8 @@ All timestamps are `timestamptz` in UTC unless the column name ends in `_local`.
 | `coach_agent` | `coach` commands run by the agent | SELECT on everything; INSERT on `outbox`; INSERT, UPDATE, DELETE on `planned_workouts`, `races`, `segments`, `segment_efforts`; nothing else |
 | `coach_ro` | `coach sql` | SELECT only, read-only sessions, statement timeout |
 
+Only the owner can create objects, temporary tables included. `coach_agent` also has USAGE on the id sequences of the tables it may insert into.
+
 ```sql
 CREATE TABLE activities (
   id              bigint PRIMARY KEY,          -- Garmin activityId
@@ -361,6 +363,10 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
 
+Garmin (sync only): `COACH_GARMIN_EMAIL`, `COACH_GARMIN_PASSWORD`, `COACH_GARMIN_TOKEN_DIR`. Model credential (bridge only), by harness: `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `CURSOR_API_KEY`. In `Settings` an empty value counts as unset.
+
+Compose-level variables, never passed into app containers: `DB_SUPERUSER_PASSWORD`, `DB_APP_PASSWORD`, `DB_AGENT_PASSWORD`, `DB_RO_PASSWORD`, `AGENT_CLI`, `AGENT_CLI_VERSION` (mandatory; `latest` opts out of pinning), `DB_MEM_LIMIT`, `SYNC_MEM_LIMIT`, `BRIDGE_MEM_LIMIT`.
+
 ## Deployment
 
 One Compose stack on the server, no published ports:
@@ -369,7 +375,9 @@ One Compose stack on the server, no published ports:
 - `migrate`: one-shot, applies migrations; the other app services start after it succeeds.
 - `sync` and `bridge`: the same app image, on the internal network plus an egress network. Non-root user, `init: true` so the agent's stray child processes are reaped, a memory limit on every service because the host is shared and has no swap.
 
-Each service gets only the environment and volumes it needs; there is no blanket `env_file`. Garmin credentials and tokens exist only in `sync` (own volume). The Telegram token and the model credential exist only in `bridge`. The agent's workspace and home directory are volumes of `bridge`. `ANTHROPIC_API_KEY` must stay unset where subscription auth is used, because it takes precedence over the subscription token. The agent CLI version is pinned in the image and upgraded deliberately.
+Each service gets only the environment and volumes it needs; there is no blanket `env_file`. Garmin credentials and tokens exist only in `sync` (own volume). The Telegram token and the model credential exist only in `bridge`. The agent's workspace and home directory are volumes of `bridge`.
+
+Volumes: `db-data`; `app-data` (`COACH_DATA_DIR`, original FIT files: read/write in `sync`, read-only in `bridge`, so the agent cannot alter source data); `garmin-auth` (`sync` only); `workspace` and `agent-home` (`bridge` only). Files the agent produces, such as plots, go under `out/` in the workspace, and `coach send` accepts paths only from there. `bridge` holds all three database URLs and hands the agent only the `coach_agent` and `coach_ro` ones. `ANTHROPIC_API_KEY` must stay unset where subscription auth is used, because it takes precedence over the subscription token. The agent CLI version is pinned in the image and upgraded deliberately.
 
 Backups (planned): nightly Postgres dump, original FIT files and the coach's memory files to an object-storage bucket, written by a credential that can create objects but not read or delete them.
 
