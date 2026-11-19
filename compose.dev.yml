@@ -1,0 +1,32 @@
+# Local development and tests: a Postgres on 127.0.0.1:55432. Nothing else.
+#
+#   docker compose -f compose.dev.yml up -d
+#   docker compose -f compose.dev.yml down          # stop (keeps data)
+#   docker compose -f compose.dev.yml down -v       # stop and delete the data volume
+#
+# The passwords below are for this local container only.
+name: thresy-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: thresy
+      DB_APP_PASSWORD: coach_app
+      DB_RO_PASSWORD: coach_ro
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d thresy"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+
+volumes:
+  db-data:
