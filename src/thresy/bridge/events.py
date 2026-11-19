@@ -4,6 +4,14 @@
   If no sleep has arrived by ``COACH_BRIDGE_BRIEFING_FALLBACK``, the briefing goes out anyway
   and says the night is not synced yet. No briefing starts after
   ``COACH_BRIDGE_BRIEFING_LATEST``.
+* Night guard: a watch sync after waking up in the night can deliver a partial night (and
+  ``sleep_arrived``) at 03:00. While the stored sleep for today ends before
+  ``COACH_BRIDGE_NIGHT_END_EARLIEST``, the night counts as possibly unfinished and the
+  briefing waits until the stored end (``wellness_daily.sleep_end_utc``, updated by later
+  sync passes) moves later, or until the fallback time, whichever comes first. Once the night
+  looks finished the run starts ``COACH_BRIDGE_BRIEFING_SETTLE_S`` later, so HRV and daily
+  stats of the same sync pass are stored too. The prompt is built from the data as it is when
+  the run starts, and names what is still missing (HRV) or possibly incomplete (the night).
 * ``new_activity`` for a run starts a post-run debrief after a short delay; uploads in a row
   are merged into one debrief.
 * ``garmin_auth_required`` and ``sync_failed`` become plain notifications (no agent run),
@@ -49,8 +57,11 @@ PROCESSED_BY = "bridge:{outcome}"
 @dataclass
 class PendingBriefing:
     day: date
-    synced: bool
     event_ids: list[int] = field(default_factory=list)
+    fallback: bool = False
+    """The fallback time has come: brief with whatever data there is."""
+    ready_at: datetime | None = None
+    """Set once the night looks finished: the run starts at this time (settle delay)."""
     enqueued: bool = False
 
 
@@ -118,7 +129,8 @@ class EventDispatcher:
                 await self._handle(event, now, local, quiet)
             except Exception:
                 log.exception("event %s (%s) could not be handled", event["id"], event["kind"])
-        await self._maybe_fallback_briefing(local, quiet)
+        await self._maybe_fallback_briefing(local)
+        await self._check_night(now)
         if not quiet:
             await self._release(now, local)
 
@@ -161,31 +173,64 @@ class EventDispatcher:
         elif self.briefing is not None and self.briefing.day == today:
             self.claimed.add(event["id"])
             self.briefing.event_ids.append(event["id"])
-            self.briefing.synced = True
         else:
             self.claimed.add(event["id"])
-            self.briefing = PendingBriefing(day=today, synced=True, event_ids=[event["id"]])
+            self.briefing = PendingBriefing(day=today, event_ids=[event["id"]])
 
-    async def _maybe_fallback_briefing(self, local: datetime, quiet: bool) -> None:
-        if not self.bs.bridge_briefing or self.briefing is not None:
+    async def _maybe_fallback_briefing(self, local: datetime) -> None:
+        if not self.bs.bridge_briefing:
             return
         moment = local.time().replace(tzinfo=None)
         if not (self.bs.briefing_fallback <= moment < self.bs.briefing_latest):
             return
         today = local.date()
+        if self.briefing is not None:
+            if self.briefing.day == today and not self.briefing.fallback:
+                log.info("fallback time reached; briefing with the night as it is stored")
+                self.briefing.fallback = True
+            return
         if await self._briefed(today):
             return
-        synced = await self.repo.sleep_synced(today)
-        log.info("no briefing yet at %s; briefing now (sleep synced: %s)", moment, synced)
-        self.briefing = PendingBriefing(day=today, synced=synced)
+        log.info("no sleep for today by %s; briefing anyway", self.bs.bridge_briefing_fallback)
+        self.briefing = PendingBriefing(day=today, fallback=True)
+
+    def _night_start_limit(self, day: date) -> datetime:
+        return datetime.combine(day, self.bs.night_end_earliest, tzinfo=self.env.zone)
+
+    async def _night_end(self, day: date) -> datetime | None:
+        """Local end of the stored night for ``day`` (None if no end is stored)."""
+        wellness = await self.repo.wellness(day)
+        end = (wellness or {}).get("sleep_end_utc")
+        return end.astimezone(self.env.zone) if end is not None else None
+
+    async def _check_night(self, now: datetime) -> None:
+        """Start the settle delay once the night of a pending briefing looks finished."""
+        pending = self.briefing
+        if pending is None or pending.enqueued or pending.fallback or pending.ready_at:
+            return
+        end = await self._night_end(pending.day)
+        if end is not None and end < self._night_start_limit(pending.day):
+            return  # a sync in the night: wait for the stored end to move, or the fallback
+        pending.ready_at = now + timedelta(seconds=self.bs.bridge_briefing_settle_s)
 
     def _briefing_job(self, pending: PendingBriefing) -> Job:
-        def build() -> prompts.ProactiveSection:
+        async def build() -> prompts.ProactiveSection:
+            # Read when the run starts, never what was there at trigger time.
+            wellness = await self.repo.wellness(pending.day)
+            synced = wellness is not None and wellness.get("sleep_synced_at") is not None
+            early_end = None
+            if synced and wellness and wellness.get("sleep_end_utc") is not None:
+                end = wellness["sleep_end_utc"].astimezone(self.env.zone)
+                if end < self._night_start_limit(pending.day):
+                    early_end = end.strftime("%H:%M")
             return prompts.briefing_section(
                 self.env,
                 pending.day,
-                synced=pending.synced,
-                fallback_time=self.bs.bridge_briefing_fallback,
+                synced=synced,
+                as_of=self._local().strftime("%H:%M"),
+                early_end=early_end,
+                night_end_earliest=self.bs.bridge_night_end_earliest,
+                hrv_missing=synced and (wellness or {}).get("hrv_night_avg") is None,
             )
 
         async def started() -> None:
@@ -236,17 +281,18 @@ class EventDispatcher:
         if activity_id not in self.debrief.activity_ids:
             self.debrief.activity_ids.append(activity_id)
 
-    async def _debrief_job(self, pending: PendingDebrief) -> Job:
-        activities = []
-        for activity_id in pending.activity_ids:
-            row = await self.repo.activity(activity_id)
-            activities.append(row or {"id": activity_id})
-        section = prompts.debrief_section(self.env, activities)
+    def _debrief_job(self, pending: PendingDebrief) -> Job:
+        async def build() -> prompts.ProactiveSection:
+            activities = []
+            for activity_id in pending.activity_ids:
+                row = await self.repo.activity(activity_id)
+                activities.append(row or {"id": activity_id})
+            return prompts.debrief_section(self.env, activities)
 
         async def done(result: RunResult | None) -> None:
             await self._mark(pending.event_ids, "debrief")
 
-        return Job(build=lambda: section, what="what_post_run", on_done=[done])
+        return Job(build=build, what="what_post_run", on_done=[done])
 
     # -- release ---------------------------------------------------------------------------------
 
@@ -260,13 +306,13 @@ class EventDispatcher:
             if briefing.day != local.date():
                 await self._mark(briefing.event_ids, "expired")
                 self.briefing = None
-            else:
+            elif briefing.fallback or (briefing.ready_at is not None and now >= briefing.ready_at):
                 briefing.enqueued = True
                 jobs.append(self._briefing_job(briefing))
         debrief = self.debrief
         if debrief is not None and now >= debrief.due:
             self.debrief = None
-            jobs.append(await self._debrief_job(debrief))
+            jobs.append(self._debrief_job(debrief))
         # Enqueued together (no await in between), so the chat worker can combine them.
         for job in jobs:
             self.enqueue(chat, job)

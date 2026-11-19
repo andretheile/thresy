@@ -40,12 +40,12 @@ def add_run(h, activity_id: int, start: datetime, distance: float = 10200.0) -> 
     )
 
 
-def add_sleep(h, wake_date: str) -> None:
+def add_sleep(h, wake_date: str, *, end: datetime | None = None, hrv: float | None = 52) -> None:
     h.conn.execute(
         "INSERT INTO wellness_daily (wake_date, sleep_s, sleep_score, hrv_night_avg,"
-        " hrv_balanced_low, hrv_balanced_high, resting_hr, sleep_synced_at)"
-        " VALUES (%s, 27120, 81, 52, 45, 60, 48, %s)",
-        (wake_date, h.clock.now()),
+        " hrv_balanced_low, hrv_balanced_high, resting_hr, sleep_synced_at, sleep_end_utc)"
+        " VALUES (%s, 27120, 81, %s, 45, 60, 48, %s, %s)",
+        (wake_date, hrv, h.clock.now(), end),
     )
 
 
@@ -64,6 +64,7 @@ def briefing_runner() -> FakeRunner:
 def test_sleep_arrived_today_starts_one_briefing_per_day(make_harness) -> None:
     async def scenario() -> None:
         async with make_harness(briefing_runner()) as h:
+            add_sleep(h, "2030-01-02", end=local(2030, 1, 2, 6, 40))
             first = add_event(
                 h, "sleep_arrived", {"wake_date": "2030-01-02"}, key="sleep:2030-01-02"
             )
@@ -129,7 +130,7 @@ def test_briefing_goes_out_unsynced_at_the_fallback_time(make_harness) -> None:
             await h.tick()
             assert runs(h) == ["morning_briefing"]
             prompt = h.runner.requests[0].prompt
-            assert "had not been synced by 10:00" in prompt
+            assert "has not been synced yet (as of 10:00)" in prompt
             assert "do not present an older night as last night" in prompt
             late = add_event(h, "sleep_arrived", {"wake_date": "2030-01-02"})
             h.clock.advance(600)
@@ -376,5 +377,108 @@ def test_numbers_only_briefing_says_when_sleep_is_missing(make_harness) -> None:
                 "Gestern: kein Lauf.",
             ]
             assert h.one("SELECT chat_id FROM outbox LIMIT 1")["chat_id"] == CHAT
+
+    asyncio.run(scenario())
+
+
+# The night guard: a watch sync after waking up in the night ------------------------------------
+
+NIGHT = {"bridge_quiet_hours": "22:00-06:00", "bridge_briefing_settle_s": 180}
+
+
+def set_sleep_end(h, end: datetime) -> None:
+    h.conn.execute(
+        "UPDATE wellness_daily SET sleep_end_utc = %s WHERE wake_date = '2030-01-02'", (end,)
+    )
+
+
+def test_night_synced_at_3am_waits_for_the_real_end_of_the_night(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(briefing_runner(), bridge=NIGHT) as h:
+            h.clock.set(local(2030, 1, 2, 3, 0))
+            add_sleep(h, "2030-01-02", end=local(2030, 1, 2, 2, 55))
+            event = add_event(h, "sleep_arrived", {"wake_date": "2030-01-02"})
+            await h.tick()
+            assert runs(h) == []
+            # Quiet hours are over, but the stored night still ends at 02:55.
+            for moment in (local(2030, 1, 2, 6, 0), local(2030, 1, 2, 6, 30)):
+                h.clock.set(moment)
+                await h.tick()
+                assert runs(h) == []
+            assert processed(h)[event] is None
+            # The next sync pass stores the real end of the night (no new event).
+            h.clock.set(local(2030, 1, 2, 6, 45))
+            set_sleep_end(h, local(2030, 1, 2, 6, 40))
+            await h.tick()
+            assert runs(h) == []  # settle delay: HRV and daily stats of that pass come too
+            h.clock.advance(179)
+            await h.tick()
+            assert runs(h) == []
+            h.clock.advance(1)
+            await h.tick()
+            assert runs(h) == ["morning_briefing"]
+            prompt = h.runner.requests[0].prompt
+            assert "has arrived in the database." in prompt
+            assert "may be incomplete" not in prompt and "HRV for last night" not in prompt
+            assert processed(h)[event] == "bridge:briefing"
+            h.clock.advance(3600)
+            await h.tick()
+            assert runs(h) == ["morning_briefing"]
+
+    asyncio.run(scenario())
+
+
+def test_unfinished_night_is_briefed_at_the_fallback_time(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(briefing_runner(), bridge=NIGHT) as h:
+            h.clock.set(local(2030, 1, 2, 3, 0))
+            add_sleep(h, "2030-01-02", end=local(2030, 1, 2, 2, 55))
+            add_event(h, "sleep_arrived", {"wake_date": "2030-01-02"})
+            for moment in (
+                local(2030, 1, 2, 3, 0),
+                local(2030, 1, 2, 7, 0),
+                local(2030, 1, 2, 9, 59),
+            ):
+                h.clock.set(moment)
+                await h.tick()
+            assert runs(h) == []
+            h.clock.set(local(2030, 1, 2, 10, 0))
+            await h.tick()
+            assert runs(h) == ["morning_briefing"]  # no settle delay at the fallback
+            prompt = h.runner.requests[0].prompt
+            assert "has arrived in the database." in prompt
+            assert "The stored night ends at 02:55, before 05:00, so it may be incomplete" in prompt
+
+    asyncio.run(scenario())
+
+
+def test_briefing_reads_the_data_when_it_runs(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(briefing_runner(), bridge=NIGHT) as h:
+            # The night is complete, but HRV is still missing when the event arrives...
+            h.clock.set(local(2030, 1, 2, 6, 50))
+            add_sleep(h, "2030-01-02", end=local(2030, 1, 2, 6, 40), hrv=None)
+            add_event(h, "sleep_arrived", {"wake_date": "2030-01-02"})
+            await h.tick()
+            # ...and arrives during the settle delay.
+            h.conn.execute("UPDATE wellness_daily SET hrv_night_avg = 50")
+            h.clock.advance(180)
+            await h.tick()
+            assert "HRV for last night" not in h.runner.requests[0].prompt
+
+    asyncio.run(scenario())
+
+
+def test_missing_hrv_is_named_in_the_prompt(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(briefing_runner(), bridge=NIGHT) as h:
+            h.clock.set(local(2030, 1, 2, 6, 50))
+            add_sleep(h, "2030-01-02", end=local(2030, 1, 2, 6, 40), hrv=None)
+            add_event(h, "sleep_arrived", {"wake_date": "2030-01-02"})
+            await h.tick()
+            h.clock.advance(180)
+            await h.tick()
+            prompt = h.runner.requests[0].prompt
+            assert "HRV for last night is not in the database yet: say so" in prompt
 
     asyncio.run(scenario())

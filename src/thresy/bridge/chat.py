@@ -35,9 +35,9 @@ class Pending:
 class Job:
     """A proactive run requested by the event dispatcher."""
 
-    build: Callable[[], prompts.ProactiveSection]
-    """Builds the job's part of the prompt when the run starts (so it reflects the latest
-    state, e.g. sleep that arrived while the job was waiting)."""
+    build: Callable[[], Awaitable[prompts.ProactiveSection]]
+    """Builds the job's part of the prompt when the run starts, from the data as it is then
+    (never from what was stored when the job was triggered)."""
     what: str
     """Text key naming the job in failure messages (``what_morning_briefing``...)."""
     numbers_day: date | None = None
@@ -102,7 +102,23 @@ class ChatWorker:
 
     # -- the loop --------------------------------------------------------------------------------
 
-    def _next_spec(self) -> RunSpec | None:
+    async def _sections(self, jobs: list[Job]) -> tuple[list[Job], list[prompts.ProactiveSection]]:
+        kept, sections = [], []
+        for job in jobs:
+            try:
+                sections.append(await job.build())
+            except Exception:
+                log.exception("chat %s: could not prepare a %s; dropped", self.chat_id, job.what)
+                for done in job.on_done:
+                    try:
+                        await done(None)
+                    except Exception:
+                        log.exception("job completion callback failed")
+                continue
+            kept.append(job)
+        return kept, sections
+
+    async def _next_spec(self) -> RunSpec | None:
         env = self.service.prompt_env
         if self.pending:
             batch, self.pending = self.pending, []
@@ -117,7 +133,9 @@ class ChatWorker:
             )
         if self.jobs:
             jobs, self.jobs = self.jobs, []
-            sections = [j.build() for j in jobs]
+            jobs, sections = await self._sections(jobs)
+            if not jobs:
+                return await self._next_spec()
             triggers = list(dict.fromkeys(s.trigger for s in sections))
             now = self.clock.now()
             return RunSpec(
@@ -138,11 +156,11 @@ class ChatWorker:
             await self._wake.wait()
             self._wake.clear()
             while not self.stopping:
-                spec = self._next_spec()
-                if spec is None:
-                    break
                 self.running = True
                 try:
+                    spec = await self._next_spec()
+                    if spec is None:
+                        break
                     await self.service.execute(spec)
                 except asyncio.CancelledError:
                     raise

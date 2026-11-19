@@ -210,19 +210,43 @@ def chat_prompt(
 
 
 def briefing_section(
-    env: PromptEnv, day: date, *, synced: bool, fallback_time: str
+    env: PromptEnv,
+    day: date,
+    *,
+    synced: bool,
+    as_of: str,
+    early_end: str | None = None,
+    night_end_earliest: str | None = None,
+    hrv_missing: bool = False,
 ) -> ProactiveSection:
-    if synced:
-        text = (
-            f"Trigger: morning briefing for {day.strftime('%a %Y-%m-%d')}. Last night's sleep"
-            f" (wake date {day.isoformat()}) has arrived in the database."
+    """The briefing trigger, describing the data as it is when the run starts (``as_of``,
+    local HH:MM).
+
+    ``early_end``: the stored night ends at this local time, before ``night_end_earliest``
+    (the athlete may have slept again after a watch sync in the night). ``hrv_missing``: the
+    night is stored but its HRV is not.
+    """
+    text = (
+        f"Trigger: morning briefing for {day.strftime('%a %Y-%m-%d')}. Last night's sleep"
+        f" (wake date {day.isoformat()})"
+    )
+    if not synced:
+        text += (
+            f" has not been synced yet (as of {as_of}): say so in one line and do not present"
+            " an older night as last night."
         )
     else:
-        text = (
-            f"Trigger: morning briefing for {day.strftime('%a %Y-%m-%d')}. Last night's sleep"
-            f" (wake date {day.isoformat()}) had not been synced by {fallback_time}: say so in"
-            " one line and do not present an older night as last night."
-        )
+        text += " has arrived in the database."
+        if early_end:
+            text += (
+                f" The stored night ends at {early_end}, before {night_end_earliest}, so it may"
+                " be incomplete (awake in the night and asleep again later): say so where it"
+                " matters."
+            )
+        if hrv_missing:
+            text += (
+                " HRV for last night is not in the database yet: say so instead of estimating it."
+            )
     return ProactiveSection("morning_briefing", text, BRIEFING_PLAYBOOK, BRIEFING_FALLBACK)
 
 

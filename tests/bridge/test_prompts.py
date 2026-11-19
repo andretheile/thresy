@@ -39,7 +39,7 @@ def test_chat_prompt(tmp_path: Path) -> None:
 
 def test_briefing_and_debrief_prompts(tmp_path: Path) -> None:
     e = env(tmp_path, playbooks=True)
-    briefing = prompts.briefing_section(e, NOW.date(), synced=True, fallback_time="10:00")
+    briefing = prompts.briefing_section(e, NOW.date(), synced=True, as_of="08:15")
     assert prompts.proactive_prompt(e, [briefing], NOW) == (
         "Nobody wrote: the bridge started this run on its own (Wed 2030-01-02 08:15,"
         " Europe/Berlin).\n\n"

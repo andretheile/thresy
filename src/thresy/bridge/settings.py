@@ -81,6 +81,13 @@ class BridgeSettings(BaseSettings):
     """If last night's sleep has not arrived by this local time, brief anyway and say so."""
     bridge_briefing_latest: str = "14:00"
     """No morning briefing is started after this local time."""
+    bridge_night_end_earliest: str = "05:00"
+    """Earliest local time a night can count as finished. If the stored sleep for today ends
+    before this (a watch sync after waking up in the night), the briefing waits until the
+    stored end moves later or until the fallback time, whichever comes first."""
+    bridge_briefing_settle_s: float = 180
+    """Delay between a finished-looking night and the briefing run, so that the sync pass that
+    stored the sleep has also stored HRV and the daily stats."""
 
     bridge_debrief: bool = True
     """Send a debrief after a run is uploaded."""
@@ -121,7 +128,9 @@ class BridgeSettings(BaseSettings):
     bridge_shutdown_grace_s: float = 20
     """On SIGTERM: how long to wait for a cancelled run to wind down and the outbox to flush."""
 
-    @field_validator("bridge_briefing_fallback", "bridge_briefing_latest")
+    @field_validator(
+        "bridge_briefing_fallback", "bridge_briefing_latest", "bridge_night_end_earliest"
+    )
     @classmethod
     def _check_time(cls, value: str) -> str:
         parse_hhmm(value)
@@ -144,6 +153,10 @@ class BridgeSettings(BaseSettings):
     @property
     def briefing_latest(self) -> time:
         return parse_hhmm(self.bridge_briefing_latest)
+
+    @property
+    def night_end_earliest(self) -> time:
+        return parse_hhmm(self.bridge_night_end_earliest)
 
 
 def local_day(moment: datetime, zone: ZoneInfo) -> date:

@@ -135,6 +135,7 @@ def make_bridge_settings(**overrides: Any) -> BridgeSettings:
     values: dict[str, Any] = {
         "bridge_quiet_hours": "off",
         "bridge_run_timeout_s": 30,
+        "bridge_briefing_settle_s": 0,  # tests of the settle delay set it themselves
     }
     values.update(overrides)
     return BridgeSettings(_env_file=None, **values)
