@@ -8,8 +8,11 @@ Conventions for every connection returned here:
 * Rows are dictionaries (``psycopg.rows.dict_row``) unless you pass another ``row_factory``.
 * Timestamps come back as timezone-aware ``datetime`` objects; the session time zone is UTC.
 
-The read/write URL (role ``coach_app``) is ``COACH_DATABASE_URL``; the read-only URL
-(role ``coach_ro``) is ``COACH_DATABASE_URL_RO``.
+:func:`connect` uses ``COACH_DATABASE_URL``: role ``coach_app`` in the services, and role
+``coach_agent`` inside agent runs, where the bridge sets the agent's ``COACH_DATABASE_URL`` to
+``COACH_AGENT_DATABASE_URL``. Code running for the agent therefore gets the agent's limited
+rights without doing anything special. :func:`connect_ro` uses ``COACH_DATABASE_URL_RO``
+(role ``coach_ro``, for ``coach sql``).
 """
 
 from __future__ import annotations

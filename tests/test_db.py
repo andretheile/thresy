@@ -26,6 +26,7 @@ WRITES = [
     "CREATE TABLE intruder (id int)",
     "DROP TABLE activities",
     "ALTER TABLE activities ADD COLUMN x int",
+    "CREATE TEMP TABLE scratch (id int)",
 ]
 
 
