@@ -135,10 +135,7 @@ class FakeRunner:
             )
 
         def cancelled() -> RunResult:
-            reason = ctx.cancel_reason or "cancelled"
-            return result(
-                False, "other", reason if reason.startswith("cancelled") else f"cancelled: {reason}"
-            )
+            return result(False, "cancelled", ctx.cancel_reason or "cancelled")
 
         if not any(isinstance(item, Started) for item in items):
             ctx.emit(Started(session))

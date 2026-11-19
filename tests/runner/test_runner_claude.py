@@ -9,22 +9,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
-from runner_testkit import (
+
+from thresy.runner import HarnessConfig, Progress, Started
+from thresy.runner.claude import ClaudeRunner, ClaudeStreamParser
+
+from .runner_testkit import (
     exit_info,
     fixture_lines,
+    group_alive,
     parse,
     read_json,
     request,
     run_collect,
     spec_env,
+    wait_until,
     write_fake_cli,
 )
-
-from thresy.runner import HarnessConfig, Progress, Started
-from thresy.runner.claude import ClaudeRunner, ClaudeStreamParser
 
 SESSION = "11111111-1111-4111-8111-000000000001"
 
@@ -152,8 +156,8 @@ def test_cancelled(tmp_path):
     _, result = parse(
         p, fixture_lines("claude/claude_new_session.jsonl"), exit_info(-2, cancelled=True)
     )
-    assert result.error_kind == "other"
-    assert result.error_detail == "cancelled: user asked to stop"
+    assert result.error_kind == "cancelled"
+    assert result.error_detail == "user asked to stop"
 
 
 # -- command line -----------------------------------------------------------------
@@ -185,24 +189,36 @@ def test_command_line_resume_with_system_append_and_config(tmp_path):
     runner = ClaudeRunner(config)
     req = request(tmp_path, session_id=SESSION, system_append="Speak German.", model_tier="fast")
     inv = runner.build_invocation(req, "/opt/claude", runner.model_for("fast"))
-    assert inv.argv == [
-        "/opt/claude",
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--model",
-        "haiku",
-        "--resume",
-        SESSION,
-        "--append-system-prompt",
-        "Speak German.",
-        "--permission-mode",
-        "auto",
-        "--max-turns",
-        "30",
-    ]
-    assert "--bare" not in inv.argv
+    try:
+        file_arg = inv.argv[inv.argv.index("--append-system-prompt-file") + 1]
+        assert inv.argv == [
+            "/opt/claude",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            "haiku",
+            "--resume",
+            SESSION,
+            "--append-system-prompt-file",
+            file_arg,
+            "--permission-mode",
+            "auto",
+            "--max-turns",
+            "30",
+        ]
+        # The instructions are in a file only this user can read, not in argv.
+        path = Path(file_arg)
+        assert path.read_text() == "Speak German."
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert inv.temp_dirs == (path.parent,)
+        assert "Speak German." not in " ".join(inv.argv)
+        assert "--bare" not in inv.argv
+    finally:
+        inv.cleanup()
+    assert not path.parent.exists()
 
 
 def test_model_tiers():
@@ -222,20 +238,39 @@ def test_bare_is_refused():
 # -- end to end through a fake binary -------------------------------------------
 
 
-def test_end_to_end_with_fake_binary(tmp_path):
+def test_end_to_end_with_fake_binary(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     work = tmp_path / "work"
     work.mkdir()
     record = tmp_path / "record.json"
     fixture = Path(__file__).parent / "fixtures/claude/claude_resume_tool_call.jsonl"
+    # The service's own secrets must not reach the agent; the harness's auth must.
+    monkeypatch.setenv("COACH_TELEGRAM_TOKEN", "secret-telegram")
+    monkeypatch.setenv("COACH_DATABASE_URL", "postgresql://app:secret@db/coach")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+    monkeypatch.setenv("CLAUDE_CODE_SIMPLE", "1")
     env = spec_env(
         record=str(record),
-        env_keys=["CLAUDE_CODE_STARTUP_FAILURE_RESULTS", "FROM_CONFIG", "FROM_REQUEST"],
+        env_keys=[
+            "CLAUDE_CODE_STARTUP_FAILURE_RESULTS",
+            "FROM_CONFIG",
+            "FROM_REQUEST",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_SIMPLE",
+            "COACH_TELEGRAM_TOKEN",
+            "COACH_DATABASE_URL",
+        ],
         steps=[{"out_file": str(fixture)}],
     )
     config = HarnessConfig(binary=str(write_fake_cli(bin_dir)), env={**env, "FROM_CONFIG": "c"})
-    req = request(work, prompt="Wie war mein Lauf?", session_id=SESSION, env={"FROM_REQUEST": "r"})
+    req = request(
+        work,
+        prompt="Wie war mein Lauf?",
+        session_id=SESSION,
+        env={"FROM_REQUEST": "r", "COACH_DATABASE_URL": "postgresql://agent@db/coach"},
+        system_append="Antworte auf Deutsch.",
+    )
     events, result = run_collect(ClaudeRunner(config).run(req))
     assert result.ok and result.text == "OK" and result.runner == "claude"
     assert result.duration_s > 0
@@ -249,14 +284,38 @@ def test_end_to_end_with_fake_binary(tmp_path):
         "CLAUDE_CODE_STARTUP_FAILURE_RESULTS": "1",
         "FROM_CONFIG": "c",
         "FROM_REQUEST": "r",
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
+        "CLAUDE_CODE_SIMPLE": None,
+        "COACH_TELEGRAM_TOKEN": None,
+        "COACH_DATABASE_URL": "postgresql://agent@db/coach",  # only the one req.env hands over
     }
     assert seen["pgid"] == seen["pid"]  # its own process group
+    # system_append arrived through a private file that is gone after the run.
+    (file_arg, info), *_ = seen["arg_files"].items()
+    assert seen["argv"][seen["argv"].index("--append-system-prompt-file") + 1] == file_arg
+    assert info == {"text": "Antworte auf Deutsch.", "mode": "0o600", "dir_mode": "0o700"}
+    assert not Path(file_arg).exists()
+    assert "Antworte" not in " ".join(seen["argv"])
+
+
+def test_lingering_cli_does_not_hold_back_the_answer(tmp_path):
+    record = tmp_path / "record.json"
+    fixture = Path(__file__).parent / "fixtures/claude/claude_new_session.jsonl"
+    env = spec_env(record=str(record), steps=[{"out_file": str(fixture)}, {"sleep": 600}])
+    config = HarnessConfig(binary=str(write_fake_cli(tmp_path)), env=env, exit_wait_s=0.5)
+    start = time.monotonic()
+    _, result = run_collect(
+        ClaudeRunner(config, kill_grace_s=0.3).run(request(tmp_path, timeout_s=120))
+    )
+    assert time.monotonic() - start < 10
+    assert result.ok and result.text == "OK"
+    pgid = read_json(record)["pgid"]
+    assert wait_until(lambda: not group_alive(pgid))
 
 
 def test_unspawnable_command_line_ends_with_final(tmp_path):
-    config = HarnessConfig(binary=str(write_fake_cli(tmp_path)))
-    req = request(tmp_path, system_append="bad \x00 byte")
-    events, result = run_collect(ClaudeRunner(config).run(req))
+    config = HarnessConfig(binary=str(write_fake_cli(tmp_path)), extra_args=("bad\x00arg",))
+    events, result = run_collect(ClaudeRunner(config).run(request(tmp_path, system_append="x")))
     assert len(events) == 1
     assert result.error_kind == "other" and "could not start" in result.error_detail
 

@@ -27,9 +27,14 @@ def test_from_env_full():
             "COACH_CODEX_MODEL_FAST": "gpt-fast",
             "COACH_CODEX_MODEL_SMART": "",
             "COACH_CODEX_ENV": "FOO=bar 'BAZ=with space'",
+            "COACH_CODEX_PASS_ENV": "AWS_REGION, GOOGLE_*  EXTRA",
+            "COACH_CODEX_EXIT_WAIT_S": "2.5",
             "COACH_CLAUDE_PERMISSION_ARGS": "--permission-mode auto",
         }
     )
+    assert config.codex.pass_env == ("AWS_REGION", "GOOGLE_*", "EXTRA")
+    assert config.codex.exit_wait_s == 2.5
+    assert config.claude.exit_wait_s == 10.0 and config.claude.pass_env == ()
     assert config.runner == "codex"
     codex = config.codex
     assert codex.binary == "/usr/local/bin/codex"
@@ -48,6 +53,8 @@ def test_from_env_full():
         {"COACH_CLAUDE_ENV": "NOEQUALS"},
         {"COACH_CLAUDE_ENV": "BAD-KEY=1"},
         {"COACH_CLAUDE_ARGS": "'unclosed"},
+        {"COACH_CLAUDE_EXIT_WAIT_S": "soon"},
+        {"COACH_CLAUDE_EXIT_WAIT_S": "-1"},
     ],
 )
 def test_from_env_errors(environ):

@@ -57,8 +57,8 @@ class RunHandle:
             async for event in run:
                 ...
 
-    `cancel()` stops the run cooperatively; the iterator then still ends with a
-    Final (error_kind "other", error_detail starting with "cancelled").
+    `cancel(reason)` stops the run cooperatively; the iterator then still ends
+    with a Final (error_kind "cancelled", error_detail = the reason).
     """
 
     def __init__(self, runner: str, req: RunRequest, driver: Driver) -> None:

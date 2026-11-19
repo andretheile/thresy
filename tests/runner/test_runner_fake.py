@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-from runner_testkit import run_collect
-
 from thresy.runner import (
     AgentRunner,
     Delay,
@@ -18,6 +16,8 @@ from thresy.runner import (
     Started,
     get_runner,
 )
+
+from .runner_testkit import run_collect
 
 
 def req(tmp_path, prompt="Wie geht's?", **kw):
@@ -110,12 +110,12 @@ def test_cancel(tmp_path):
         async for event in handle:
             events.append(event)
             if isinstance(event, Started):
-                handle.cancel()
+                handle.cancel("new message arrived")
         return events
 
     events = asyncio.run(scenario())
-    assert events[-1].result.error_kind == "other"
-    assert events[-1].result.error_detail == "cancelled"
+    assert events[-1].result.error_kind == "cancelled"
+    assert events[-1].result.error_detail == "new message arrived"
 
 
 def test_healthcheck_and_registry(tmp_path):

@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from runner_testkit import exit_info, fixture_lines, parse, request
-
 from thresy.runner import HarnessConfig, Progress, Started
-from thresy.runner.cursor import CursorRunner, CursorStreamParser, prepend_system
+from thresy.runner.cli_base import prepend_system
+from thresy.runner.cursor import PROMPT_ON_COMMAND_LINE, CursorRunner, CursorStreamParser
+
+from .runner_testkit import exit_info, fixture_lines, parse, request
 
 SESSION = "c6b62c6f-7ead-4fd6-9922-e952131177ff"
 
@@ -124,3 +125,15 @@ def test_healthcheck_status_json(tmp_path):
     health = asyncio.run(CursorRunner(HarnessConfig(binary=str(script))).healthcheck())
     assert health.auth_ok is True and health.ok
     assert "example.org" not in health.detail
+    # The prompt cannot be kept off the command line with this CLI: always warned.
+    assert PROMPT_ON_COMMAND_LINE in health.warnings
+
+
+def test_result_is_terminal(tmp_path):
+    p = parser(tmp_path)
+    lines = fixture_lines("cursor/cursor_docs_sequence.jsonl")
+    for line in lines[:-1]:
+        p.feed_line(line)
+    assert not p.terminal_seen
+    p.feed_line(lines[-1])
+    assert p.terminal_seen

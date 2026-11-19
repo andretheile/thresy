@@ -3,10 +3,14 @@
 # The application image: the `coach` CLI plus one coding-agent CLI. The sync poller and the
 # chat bridge run as separate Compose services from this image.
 #
-#   docker build -f docker/Dockerfile --build-arg AGENT_CLI=claude -t thresy-app .
+#   docker build -f docker/Dockerfile \
+#     --build-arg AGENT_CLI=claude --build-arg AGENT_CLI_VERSION=2.1.311-1 -t thresy-app .
 #
 # AGENT_CLI selects the coding agent: claude (default), codex, cursor or none.
-# AGENT_CLI_VERSION optionally pins its version (claude: apt package version, codex: release).
+# AGENT_CLI_VERSION pins its version and is required for claude and codex, so that upgrades are
+# deliberate: claude takes the apt package version (e.g. 2.1.311-1), codex a release version
+# (the GitHub release tag without its rust-v prefix); "latest" opts out of pinning. cursor's
+# installer cannot pin a version.
 
 ARG PYTHON_IMAGE=python:3.13-slim-trixie
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.0
@@ -44,19 +48,24 @@ COPY docker/install-agent.sh /usr/local/bin/install-agent
 RUN chmod 0755 /usr/local/bin/install-agent \
  && install-agent "$AGENT_CLI" "$AGENT_CLI_VERSION"
 
+# Mount points of the named volumes. A new named volume takes the owner and mode of the
+# directory in the image, so create them here for the non-root user.
 RUN groupadd --gid 10001 coach \
  && useradd --uid 10001 --gid coach --create-home --home-dir /home/coach --shell /bin/bash coach \
- && mkdir -p /data /workspace \
- && chown coach:coach /data /workspace
+ && mkdir -p /data /workspace /garmin \
+ && chown coach:coach /data /workspace /garmin \
+ && chmod 0700 /garmin /home/coach
 
 COPY --from=build /app /app
 
+# DISABLE_AUTOUPDATER / DISABLE_UPDATES: the agent CLI version is pinned by the image build.
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     COACH_DATA_DIR=/data \
     COACH_WORKSPACE_DIR=/workspace \
     AGENT_CLI=${AGENT_CLI} \
-    DISABLE_AUTOUPDATER=1
+    DISABLE_AUTOUPDATER=1 \
+    DISABLE_UPDATES=1
 
 USER coach
 WORKDIR /workspace

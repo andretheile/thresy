@@ -60,10 +60,12 @@ def _fresh_root() -> typer.Typer:
     return root
 
 
-def test_plugins_are_discovered_and_missing_ones_skipped(fake_plugins) -> None:
+def test_plugins_are_discovered_and_missing_ones_skipped(fake_plugins, monkeypatch) -> None:
+    # Independent of which real packages exist: two fakes and one package that does not exist.
+    monkeypatch.setattr(cli, "PLUGINS", {"sync": "sync", "nosuchpackage": "x", "tools": None})
     root = _fresh_root()
     mounted = cli.register_plugins(root)
-    assert mounted == ["sync", "tools"]  # importer, analysis, bridge, runner do not exist here
+    assert mounted == ["sync", "tools"]
 
     result = runner.invoke(root, ["sync", "once"])
     assert result.exit_code == 0 and result.output.strip() == "synced 2"

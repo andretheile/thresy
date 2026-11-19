@@ -14,6 +14,11 @@ Command line (working directory = RunRequest.cwd; also passed as --workspace):
 
 The CLI has no option for extra system instructions, so RunRequest.system_append
 is prepended to the prompt.
+
+WARNING: the documentation offers no stdin or file route for the prompt, so the
+prompt (with any system_append) is a command-line argument and visible to every
+user on the host via `ps`. Only use this adapter where that is acceptable; the
+healthcheck repeats this warning.
 """
 
 from __future__ import annotations
@@ -24,11 +29,16 @@ from collections.abc import Mapping
 from typing import Any
 
 from .classify import classify_text, summarize_tool
-from .cli_base import CliRunner, Invocation, StreamParser, redact
+from .cli_base import CliRunner, Invocation, StreamParser, prepend_system, redact
 from .core import Progress, RunEvent, RunnerCapabilities, RunRequest, RunResult, Started
 from .process import ProcessExit
 
 log = logging.getLogger(__name__)
+
+PROMPT_ON_COMMAND_LINE = (
+    "the Cursor CLI takes the prompt as a command-line argument: other users on this "
+    "host can read it via ps"
+)
 
 
 class CursorStreamParser(StreamParser):
@@ -59,6 +69,7 @@ class CursorStreamParser(StreamParser):
             return [Progress("tool", line)] if line else []
         if kind == "result":
             self._result = obj
+            self.terminal_seen = True
             if isinstance(obj.get("session_id"), str) and obj["session_id"]:
                 self.session_id = obj["session_id"]
             return []
@@ -88,7 +99,12 @@ class CursorRunner(CliRunner):
     default_binaries = ("agent", "cursor-agent")
     default_models: Mapping[str, str | None] = {}  # the CLI's default
     default_permission_args = ("--force", "--trust")
+    # Documented: CURSOR_API_KEY, CURSOR_CONFIG_DIR (XDG_CONFIG_HOME is a base variable).
+    env_prefixes = ("CURSOR_",)
     verified = False
+
+    def static_warnings(self) -> list[str]:
+        return [PROMPT_ON_COMMAND_LINE]
 
     def build_invocation(self, req: RunRequest, binary: str, model: str | None) -> Invocation:
         argv = [binary, "-p", "--output-format", "stream-json", "--workspace", str(req.cwd)]
@@ -126,13 +142,6 @@ class CursorRunner(CliRunner):
             "status output not recognised: " + redact(text.splitlines()[0] if text else ""),
             [],
         )
-
-
-def prepend_system(prompt: str, system_append: str | None) -> str:
-    """The contract's fallback for harnesses without a system-prompt option."""
-    if not system_append or not system_append.strip():
-        return prompt
-    return f"{system_append.strip()}\n\n---\n\n{prompt}"
 
 
 def _message_text(message: Any) -> str:

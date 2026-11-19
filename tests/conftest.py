@@ -8,9 +8,9 @@ Environment:
 
 * ``COACH_TEST_ADMIN_URL``: superuser URL of the dev server
   (default ``postgresql://postgres:postgres@127.0.0.1:55432/postgres``).
-* ``COACH_TEST_APP_PASSWORD`` / ``COACH_TEST_RO_PASSWORD``: passwords of ``coach_app`` /
-  ``coach_ro`` on that server (default: the compose.dev.yml values). Missing roles are created
-  with these passwords.
+* ``COACH_TEST_APP_PASSWORD`` / ``COACH_TEST_AGENT_PASSWORD`` / ``COACH_TEST_RO_PASSWORD``:
+  passwords of ``coach_app`` / ``coach_agent`` / ``coach_ro`` on that server (default: the
+  compose.dev.yml values). Missing roles are created with these passwords.
 * ``COACH_LEGACY_DIR``: the old bot's export, for the ``legacy`` parity tests.
 """
 
@@ -38,6 +38,7 @@ START_HINT = "start it with: docker compose -f compose.dev.yml up -d"
 class PgServer:
     admin_url: str
     app_password: str
+    agent_password: str
     ro_password: str
 
     def url(self, *, user: str, password: str, dbname: str) -> str:
@@ -58,6 +59,7 @@ class PgServer:
         return TestDatabase(
             name=name,
             app_url=self.url(user="coach_app", password=self.app_password, dbname=name),
+            agent_url=self.url(user="coach_agent", password=self.agent_password, dbname=name),
             ro_url=self.url(user="coach_ro", password=self.ro_password, dbname=name),
         )
 
@@ -74,14 +76,16 @@ class TestDatabase:
 
     name: str
     app_url: str
+    agent_url: str
     ro_url: str
 
 
 def _ensure_roles(server: PgServer) -> None:
-    """Create coach_app / coach_ro like docker/postgres/initdb/10-roles.sh, if missing."""
+    """Create the roles like docker/postgres/initdb/10-roles.sh, if missing."""
     with server.admin() as conn:
         for role, password in (
             ("coach_app", server.app_password),
+            ("coach_agent", server.agent_password),
             ("coach_ro", server.ro_password),
         ):
             exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
@@ -99,6 +103,7 @@ def pg_server() -> PgServer:
     server = PgServer(
         admin_url=os.environ.get("COACH_TEST_ADMIN_URL", DEFAULT_ADMIN_URL),
         app_password=os.environ.get("COACH_TEST_APP_PASSWORD", "coach_app"),
+        agent_password=os.environ.get("COACH_TEST_AGENT_PASSWORD", "coach_agent"),
         ro_password=os.environ.get("COACH_TEST_RO_PASSWORD", "coach_ro"),
     )
     try:
@@ -144,6 +149,13 @@ def conn(test_db: TestDatabase) -> Iterator[psycopg.Connection[Any]]:
     """A read/write (coach_app) connection to an emptied test database."""
     with db.connect(test_db.app_url) as connection:
         _truncate_all(connection)
+        yield connection
+
+
+@pytest.fixture
+def agent_conn(test_db: TestDatabase) -> Iterator[psycopg.Connection[Any]]:
+    """A coach_agent connection to the test database (use together with ``conn``)."""
+    with db.connect(test_db.agent_url) as connection:
         yield connection
 
 

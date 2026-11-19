@@ -5,11 +5,20 @@
 #
 # Binaries go to system locations (not $HOME), because the agent's home directory is a volume
 # that would hide anything installed there and keep stale copies across image updates.
-# Self-updates are not used: rebuild the image to update.
+# Self-updates are not used: the version is pinned here and upgraded by rebuilding the image.
+# claude and codex need a version (claude: apt package version such as 2.1.311-1; codex: release
+# version); the word "latest" installs the newest release instead.
 set -eu
 
 AGENT="${1:-none}"
 VERSION="${2:-}"
+
+require_version() {
+  if [ -z "$VERSION" ]; then
+    echo "install-agent: set AGENT_CLI_VERSION for $AGENT (a pinned version, or 'latest')" >&2
+    exit 1
+  fi
+}
 
 # Fingerprint of the Claude Code release signing key, as published in the official setup docs.
 CLAUDE_KEY_FPR="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
@@ -20,6 +29,7 @@ case "$AGENT" in
     ;;
 
   claude)
+    require_version
     # Official signed apt repository, stable channel:
     # https://code.claude.com/docs/en/setup (Install with Linux package managers)
     apt-get update
@@ -34,10 +44,10 @@ case "$AGENT" in
     echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main" \
       > /etc/apt/sources.list.d/claude-code.list
     apt-get update
-    if [ -n "$VERSION" ]; then
-      apt-get install -y --no-install-recommends "claude-code=$VERSION"
-    else
+    if [ "$VERSION" = latest ]; then
       apt-get install -y --no-install-recommends claude-code
+    else
+      apt-get install -y --no-install-recommends "claude-code=$VERSION"
     fi
     apt-get purge -y --auto-remove gpg
     rm -rf /var/lib/apt/lists/*
@@ -45,6 +55,7 @@ case "$AGENT" in
     ;;
 
   codex)
+    require_version
     # Official static (musl) release binaries from GitHub: https://github.com/openai/codex
     arch="$(uname -m)"
     case "$arch" in
@@ -52,10 +63,10 @@ case "$AGENT" in
       *) echo "install-agent: codex has no Linux build for $arch" >&2; exit 1 ;;
     esac
     asset="codex-${arch}-unknown-linux-musl"
-    if [ -n "$VERSION" ]; then
-      url="https://github.com/openai/codex/releases/download/rust-v${VERSION}/${asset}.tar.gz"
-    else
+    if [ "$VERSION" = latest ]; then
       url="https://github.com/openai/codex/releases/latest/download/${asset}.tar.gz"
+    else
+      url="https://github.com/openai/codex/releases/download/rust-v${VERSION}/${asset}.tar.gz"
     fi
     tmp="$(mktemp -d)"
     curl -fsSL "$url" | tar -xz -C "$tmp"

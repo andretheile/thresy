@@ -5,16 +5,26 @@ Nothing in here knows about a specific harness.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .handle import RunHandle
 
 ModelTier = Literal["fast", "smart"]
-ErrorKind = Literal["rate_limit", "auth", "timeout", "crash", "other"]
+ErrorKind = Literal["rate_limit", "auth", "timeout", "crash", "cancelled", "other"]
 ProgressKind = Literal["text", "tool"]
 
-ERROR_KINDS: tuple[ErrorKind, ...] = ("rate_limit", "auth", "timeout", "crash", "other")
+ERROR_KINDS: tuple[ErrorKind, ...] = (
+    "rate_limit",
+    "auth",
+    "timeout",
+    "crash",
+    "cancelled",
+    "other",
+)
 
 
 @dataclass(frozen=True)
@@ -119,10 +129,11 @@ class AgentRunner(Protocol):
     name: str
     capabilities: RunnerCapabilities
 
-    def run(self, req: RunRequest) -> AsyncIterator[RunEvent]:
-        """Start a run. The returned iterator (a RunHandle) yields Started at
-        most once, any number of Progress events, and always ends with exactly
-        one Final. It never raises for agent-side failures."""
+    def run(self, req: RunRequest) -> RunHandle:
+        """Start a run. The returned RunHandle (an AsyncIterator[RunEvent] with
+        cancel(), result() and aclose()) yields Started at most once, any number
+        of Progress events, and ends with exactly one Final. It never raises for
+        agent-side failures."""
         ...
 
     async def healthcheck(self) -> Health: ...

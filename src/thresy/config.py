@@ -7,15 +7,18 @@ Usage::
     settings = get_settings()
     settings.database_url
 
-Packages that need settings of their own (Garmin credentials, transport options, ...) should
-not edit this module. They define a small settings class that reuses the same configuration::
+Packages that need settings of their own should not edit this module. They define a small
+settings class that reuses the same configuration::
 
     from pydantic_settings import BaseSettings
     from thresy.config import SETTINGS_CONFIG
 
-    class GarminSettings(BaseSettings):
+    class WeatherSettings(BaseSettings):
         model_config = SETTINGS_CONFIG
-        garmin_email: str | None = None      # read from COACH_GARMIN_EMAIL
+        weather_api_key: str | None = None   # read from COACH_WEATHER_API_KEY
+
+Unknown ``COACH_*`` variables (in the environment or in ``.env``) are ignored, so each package
+can read its own without the others failing.
 """
 
 from __future__ import annotations
@@ -32,7 +35,8 @@ SETTINGS_CONFIG = SettingsConfigDict(
     env_prefix="COACH_",
     env_file=".env",
     env_file_encoding="utf-8",
-    extra="ignore",
+    extra="ignore",  # other packages' COACH_* keys
+    env_ignore_empty=True,  # `COACH_X=` (as copied from .env.example) means "not set"
 )
 
 
@@ -49,7 +53,11 @@ class Settings(BaseSettings):
     """Read/write connection URL (role ``coach_app``), e.g. ``postgresql://coach_app:...@db/thresy``."""
 
     database_url_ro: str | None = None
-    """Read-only connection URL (role ``coach_ro``), used for ad-hoc SQL by the agent."""
+    """Read-only connection URL (role ``coach_ro``), used by ``coach sql``."""
+
+    agent_database_url: str | None = None
+    """URL of the ``coach_agent`` role. The bridge hands it to the agent as the agent's own
+    ``COACH_DATABASE_URL``; services never connect with it themselves."""
 
     data_dir: Path = Path("private/data")
     """FIT files, plots and other runtime files. ``activities.fit_path`` is relative to this."""
@@ -67,20 +75,17 @@ class Settings(BaseSettings):
     """The name the coach uses for itself (``COACH_NAME``)."""
 
     runner: str = "claude"
-    """Coding agent CLI: ``claude``, ``codex``, ``cursor`` or ``fake``."""
-
-    runner_model_fast: str | None = None
-    """Model for the ``fast`` tier; ``None`` uses the runner's default."""
-
-    runner_model_smart: str | None = None
-    """Model for the ``smart`` tier; ``None`` uses the runner's default."""
-
-    runner_timeout_s: float = 900.0
-    """Upper bound for one agent run."""
+    """Coding agent CLI: ``claude``, ``codex``, ``cursor`` or ``fake``. Everything else about
+    the runners (``COACH_<NAME>_MODEL_FAST`` etc.) is read by :mod:`thresy.runner.config`."""
 
     telegram_token: SecretStr | None = None
     telegram_chat_ids: Annotated[tuple[str, ...], NoDecode] = ()
     """Allow-listed chat ids, comma separated in the environment (``123,-456``)."""
+
+    garmin_email: str | None = None
+    garmin_password: SecretStr | None = None
+    garmin_token_dir: Path = Path("private/garmin")
+    """Where the Garmin session tokens are kept (a volume of the sync service only)."""
 
     legacy_dir: Path | None = None
     """The old bot's export (``COACH_LEGACY_DIR``); used by the importer and parity tests."""
@@ -115,6 +120,12 @@ class Settings(BaseSettings):
             name = "COACH_DATABASE_URL_RO" if read_only else "COACH_DATABASE_URL"
             raise ConfigError(f"{name} is not set (see .env.example)")
         return url
+
+    def require_agent_database_url(self) -> str:
+        """Return the ``coach_agent`` URL, or raise :class:`ConfigError` if unset."""
+        if not self.agent_database_url:
+            raise ConfigError("COACH_AGENT_DATABASE_URL is not set (see .env.example)")
+        return self.agent_database_url
 
 
 @lru_cache(maxsize=1)
