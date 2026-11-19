@@ -1,12 +1,24 @@
-# Production stack: Postgres plus one application image that runs as two services.
+# Production stack: Postgres, a one-shot migration, and one application image that runs as the
+# sync and bridge services.
 #
-#   cp .env.example .env            # set DB_*_PASSWORD, tokens, COACH_TZ, ...
+#   cp .env.example .env            # set the DB_*_PASSWORD values, tokens, COACH_TZ, ...
 #   docker compose up -d --build
 #
-# No ports are published. The database is on an internal network; the app services also join
-# an egress network to reach Garmin, Telegram and the model provider. Every service has a
-# memory limit because the host is shared and has no swap.
+# No ports are published. The database is on an internal network; sync and bridge also join an
+# egress network to reach Garmin, Telegram and the model provider. Every service has a memory
+# limit because the host is shared and has no swap.
+#
+# Least privilege: there is no env_file. .env is only read by Compose to fill in the values
+# below, and each service lists exactly the variables it gets. Garmin credentials and tokens
+# exist only in sync; the Telegram token and the model credential only in bridge.
+# ANTHROPIC_API_KEY is deliberately not passed anywhere: it would take precedence over the
+# subscription token (CLAUDE_CODE_OAUTH_TOKEN).
 name: thresy
+
+x-database-urls:
+  app: &app-url postgresql://coach_app:${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}@db:5432/thresy
+  agent: &agent-url postgresql://coach_agent:${DB_AGENT_PASSWORD:?set DB_AGENT_PASSWORD in .env}@db:5432/thresy
+  ro: &ro-url postgresql://coach_ro:${DB_RO_PASSWORD:?set DB_RO_PASSWORD in .env}@db:5432/thresy
 
 x-app: &app
   build:
@@ -16,23 +28,12 @@ x-app: &app
       AGENT_CLI: ${AGENT_CLI:-claude}
       AGENT_CLI_VERSION: ${AGENT_CLI_VERSION:-}
   image: thresy-app:latest
-  init: true # reaps the agent CLI's child processes
+  init: true # reaps the agent CLI's stray child processes
   restart: unless-stopped
-  env_file:
-    - path: .env
-      required: false
-  environment:
-    COACH_DATABASE_URL: postgresql://coach_app:${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}@db:5432/thresy
-    COACH_DATABASE_URL_RO: postgresql://coach_ro:${DB_RO_PASSWORD:?set DB_RO_PASSWORD in .env}@db:5432/thresy
-    COACH_DATA_DIR: /data
-    COACH_WORKSPACE_DIR: /workspace
-    DB_SUPERUSER_PASSWORD: "" # keep the superuser password out of the app containers
+  networks: [backend, egress]
   depends_on:
     migrate:
       condition: service_completed_successfully
-  networks: [backend, egress]
-  volumes:
-    - app-data:/data
 
 services:
   db:
@@ -42,7 +43,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD:?set DB_SUPERUSER_PASSWORD in .env}
       POSTGRES_DB: thresy
+      # read by docker/postgres/initdb/10-roles.sh on the first start only
       DB_APP_PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}
+      DB_AGENT_PASSWORD: ${DB_AGENT_PASSWORD:?set DB_AGENT_PASSWORD in .env}
       DB_RO_PASSWORD: ${DB_RO_PASSWORD:?set DB_RO_PASSWORD in .env}
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -55,7 +58,7 @@ services:
       retries: 30
     mem_limit: ${DB_MEM_LIMIT:-512m}
 
-  # One-shot: applies migrations, then exits; sync and bridge start after it succeeded.
+  # One-shot: applies migrations as coach_app, then exits; sync and bridge start after it.
   migrate:
     <<: *app
     command: ["coach", "db", "migrate"]
@@ -64,16 +67,66 @@ services:
       db:
         condition: service_healthy
     networks: [backend]
+    environment:
+      COACH_DATABASE_URL: *app-url
     mem_limit: 256m
 
+  # Garmin polling. The only service with Garmin credentials and the Garmin token volume.
   sync:
     <<: *app
     command: ["coach", "sync", "poll"]
+    environment:
+      COACH_DATABASE_URL: *app-url
+      COACH_DATA_DIR: /data
+      COACH_TZ: ${COACH_TZ:-UTC}
+      COACH_GARMIN_TOKEN_DIR: /garmin
+      COACH_GARMIN_EMAIL:
+      COACH_GARMIN_PASSWORD:
+    volumes:
+      - app-data:/data
+      - garmin-auth:/garmin
     mem_limit: ${SYNC_MEM_LIMIT:-512m}
 
+  # Chat loop and agent runs. The only service with the Telegram token, the model credential,
+  # the agent's database URL, the coach workspace and the agent's home directory.
   bridge:
     <<: *app
     command: ["coach", "bridge", "run"]
+    environment:
+      COACH_DATABASE_URL: *app-url
+      COACH_DATABASE_URL_RO: *ro-url
+      COACH_AGENT_DATABASE_URL: *agent-url
+      COACH_DATA_DIR: /data
+      COACH_WORKSPACE_DIR: /workspace
+      COACH_TZ: ${COACH_TZ:-UTC}
+      COACH_LANGUAGE: ${COACH_LANGUAGE:-en}
+      COACH_NAME: ${COACH_NAME:-Thresy}
+      COACH_RUNNER: ${COACH_RUNNER:-claude}
+      COACH_TELEGRAM_TOKEN:
+      COACH_TELEGRAM_CHAT_IDS:
+      # Model credential of the configured harness (unset ones are not passed).
+      CLAUDE_CODE_OAUTH_TOKEN:
+      CODEX_API_KEY:
+      CURSOR_API_KEY:
+      # Runner settings, passed only when set in .env (an empty value is not the same as unset).
+      COACH_CLAUDE_BIN:
+      COACH_CLAUDE_ARGS:
+      COACH_CLAUDE_PERMISSION_ARGS:
+      COACH_CLAUDE_MODEL_FAST:
+      COACH_CLAUDE_MODEL_SMART:
+      COACH_CLAUDE_ENV:
+      COACH_CODEX_BIN:
+      COACH_CODEX_ARGS:
+      COACH_CODEX_PERMISSION_ARGS:
+      COACH_CODEX_MODEL_FAST:
+      COACH_CODEX_MODEL_SMART:
+      COACH_CODEX_ENV:
+      COACH_CURSOR_BIN:
+      COACH_CURSOR_ARGS:
+      COACH_CURSOR_PERMISSION_ARGS:
+      COACH_CURSOR_MODEL_FAST:
+      COACH_CURSOR_MODEL_SMART:
+      COACH_CURSOR_ENV:
     volumes:
       - app-data:/data
       - workspace:/workspace
@@ -88,5 +141,6 @@ networks:
 volumes:
   db-data:
   app-data:
+  garmin-auth:
   workspace:
   agent-home:
