@@ -1,0 +1,92 @@
+# Production stack: Postgres plus one application image that runs as two services.
+#
+#   cp .env.example .env            # set DB_*_PASSWORD, tokens, COACH_TZ, ...
+#   docker compose up -d --build
+#
+# No ports are published. The database is on an internal network; the app services also join
+# an egress network to reach Garmin, Telegram and the model provider. Every service has a
+# memory limit because the host is shared and has no swap.
+name: thresy
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    args:
+      AGENT_CLI: ${AGENT_CLI:-claude}
+      AGENT_CLI_VERSION: ${AGENT_CLI_VERSION:-}
+  image: thresy-app:latest
+  init: true # reaps the agent CLI's child processes
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    COACH_DATABASE_URL: postgresql://coach_app:${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}@db:5432/thresy
+    COACH_DATABASE_URL_RO: postgresql://coach_ro:${DB_RO_PASSWORD:?set DB_RO_PASSWORD in .env}@db:5432/thresy
+    COACH_DATA_DIR: /data
+    COACH_WORKSPACE_DIR: /workspace
+    DB_SUPERUSER_PASSWORD: "" # keep the superuser password out of the app containers
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  networks: [backend, egress]
+  volumes:
+    - app-data:/data
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD:?set DB_SUPERUSER_PASSWORD in .env}
+      POSTGRES_DB: thresy
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}
+      DB_RO_PASSWORD: ${DB_RO_PASSWORD:?set DB_RO_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d thresy"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    mem_limit: ${DB_MEM_LIMIT:-512m}
+
+  # One-shot: applies migrations, then exits; sync and bridge start after it succeeded.
+  migrate:
+    <<: *app
+    command: ["coach", "db", "migrate"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    mem_limit: 256m
+
+  sync:
+    <<: *app
+    command: ["coach", "sync", "poll"]
+    mem_limit: ${SYNC_MEM_LIMIT:-512m}
+
+  bridge:
+    <<: *app
+    command: ["coach", "bridge", "run"]
+    volumes:
+      - app-data:/data
+      - workspace:/workspace
+      - agent-home:/home/coach
+    mem_limit: ${BRIDGE_MEM_LIMIT:-1536m}
+
+networks:
+  backend:
+    internal: true
+  egress: {}
+
+volumes:
+  db-data:
+  app-data:
+  workspace:
+  agent-home:
