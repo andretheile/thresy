@@ -1,0 +1,28 @@
+# Personal data: the old bot's export (health data, GPS tracks, chat history). Never commit.
+legacy/
+private/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+garmin_tokens.json
+.garminconnect/
+.garmin_token/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Runtime output
+plots/
+out/
+*.log
+.DS_Store
