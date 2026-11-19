@@ -254,6 +254,7 @@ class EventDispatcher:
         chat = self.default_chat()
         if chat is None:
             return
+        jobs: list[Job] = []
         briefing = self.briefing
         if briefing is not None and not briefing.enqueued:
             if briefing.day != local.date():
@@ -261,11 +262,14 @@ class EventDispatcher:
                 self.briefing = None
             else:
                 briefing.enqueued = True
-                self.enqueue(chat, self._briefing_job(briefing))
+                jobs.append(self._briefing_job(briefing))
         debrief = self.debrief
         if debrief is not None and now >= debrief.due:
             self.debrief = None
-            self.enqueue(chat, await self._debrief_job(debrief))
+            jobs.append(await self._debrief_job(debrief))
+        # Enqueued together (no await in between), so the chat worker can combine them.
+        for job in jobs:
+            self.enqueue(chat, job)
         deferred, self.deferred = self.deferred, []
         for event in deferred:
             await self._notify_problem(event, now)
