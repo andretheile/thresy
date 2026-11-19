@@ -41,6 +41,8 @@ M_PER_DEG = 111320.0
 MAX_OFFSET_M = 40.0
 BACK_M = 100.0
 AHEAD_M = 400.0
+CONFIRM_M = 200.0
+LOST_M = 300.0
 RESAMPLE_M = 5.0
 COVER_CELL_M = 40.0
 
@@ -73,38 +75,112 @@ def reference_track(
     return pts, cum, pos.index.to_numpy()[keep]
 
 
+class _Course:
+    """The reference polyline with what projections onto it need."""
+
+    def __init__(self, ref_xy: np.ndarray, ref_cum: np.ndarray) -> None:
+        self.a = ref_xy[:-1]
+        self.d = np.diff(ref_xy, axis=0)
+        self.len2 = np.maximum((self.d**2).sum(axis=1), 1e-9)
+        self.len = np.sqrt(self.len2)
+        self.cum = ref_cum
+
+    def project(self, p: np.ndarray, lo: int, hi: int) -> tuple[np.ndarray, np.ndarray]:
+        """Offsets and course distances of ``p`` projected onto segments ``lo:hi``."""
+        rel = p - self.a[lo:hi]
+        tt = np.clip((rel * self.d[lo:hi]).sum(axis=1) / self.len2[lo:hi], 0.0, 1.0)
+        near = self.a[lo:hi] + tt[:, None] * self.d[lo:hi]
+        return np.hypot(*(near - p).T), self.cum[lo:hi] + tt * self.len[lo:hi]
+
+    def window(self, last: float) -> tuple[int, int]:
+        lo = int(np.searchsorted(self.cum, last - BACK_M, side="left"))
+        hi = int(np.searchsorted(self.cum, last + AHEAD_M, side="right"))
+        return max(lo - 1, 0), min(hi, len(self.a))
+
+    def nearest_in_window(self, p: np.ndarray, last: float) -> tuple[float, float]:
+        lo, hi = self.window(last)
+        if hi <= lo:
+            return float("inf"), last
+        off, pos = self.project(p, lo, hi)
+        k = int(np.argmin(off))
+        return float(off[k]), float(pos[k])
+
+    def candidates(self, p: np.ndarray, max_offset_m: float, floor: float) -> list[float]:
+        """Course distances where ``p`` lies on the course: the nearest point of every part of
+        the course within ``max_offset_m`` (a place passed twice gives two candidates)."""
+        off, pos = self.project(p, 0, len(self.a))
+        ok = (off <= max_offset_m) & (pos >= floor)
+        if not ok.any():
+            return []
+        order = np.argsort(pos[ok])
+        positions, offsets = pos[ok][order], off[ok][order]
+        out, best = [], 0
+        for k in range(1, len(positions) + 1):
+            if k == len(positions) or positions[k] - positions[k - 1] > BACK_M:
+                group = slice(best, k)
+                out.append(float(positions[group][np.argmin(offsets[group])]))
+                best = k
+        return out
+
+
 def project_progress(
     ref_xy: np.ndarray, ref_cum: np.ndarray, xy: np.ndarray, *, max_offset_m: float = MAX_OFFSET_M
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Course distance and offset for each point of ``xy`` (NaN progress when off-route)."""
-    a = ref_xy[:-1]
-    d = np.diff(ref_xy, axis=0)
-    seg_len2 = np.maximum((d**2).sum(axis=1), 1e-9)
-    seg_len = np.sqrt(seg_len2)
-    progress = np.full(len(xy), np.nan)
-    offset = np.full(len(xy), np.nan)
-    last = 0.0
-    started = False
-    for i, p in enumerate(xy):
-        if started:
-            lo = int(np.searchsorted(ref_cum, last - BACK_M, side="left"))
-            hi = int(np.searchsorted(ref_cum, last + AHEAD_M, side="right"))
-            lo, hi = max(lo - 1, 0), min(hi, len(a))
-        else:
-            lo, hi = 0, len(a)
-        if hi <= lo:
+    """Course distance and offset for each point of ``xy`` (NaN progress when off-route).
+
+    Tracking locks onto the course only where the projected progress then advances together
+    with the track's own distance for :data:`CONFIRM_M` (so crossing the course, or running
+    along it the other way, does not count), follows it within a window around the progress so
+    far, and searches the whole course ahead again after :data:`LOST_M` off it.
+    """
+    course = _Course(ref_xy, ref_cum)
+    n = len(xy)
+    own = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] if n else np.zeros(0)
+    progress = np.full(n, np.nan)
+    offset = np.full(n, np.nan)
+
+    def follows(i: int, start: float) -> tuple[bool, float]:
+        """Does the track follow the course from ``start`` over the next CONFIRM_M?"""
+        end = int(np.searchsorted(own, own[i] + CONFIRM_M, side="right"))
+        span = own[min(end, n) - 1] - own[i]
+        if span < min(CONFIRM_M, 50.0) or end - i < 3:
+            return False, float("inf")
+        last, matched = start, 0
+        for k in range(i + 1, min(end, n)):
+            off, pos = course.nearest_in_window(xy[k], last)
+            if off <= max_offset_m:
+                last = max(last, pos)
+                matched += 1
+        error = abs((last - start) - span)
+        ok = matched >= 0.8 * (min(end, n) - i - 1) and error <= 0.25 * span + 20
+        return ok, error
+
+    last: float | None = None
+    floor = -np.inf
+    off_since: float | None = None
+    for i in range(n):
+        if last is None:
+            best = None
+            for start in course.candidates(xy[i], max_offset_m, floor):
+                ok, error = follows(i, start)
+                if ok and (best is None or error < best[1]):
+                    best = (start, error)
+            if best is not None:
+                last = best[0]
+                progress[i] = last
+                offset[i] = 0.0
+                off_since = None
             continue
-        rel = p - a[lo:hi]
-        tt = np.clip((rel * d[lo:hi]).sum(axis=1) / seg_len2[lo:hi], 0.0, 1.0)
-        near = a[lo:hi] + tt[:, None] * d[lo:hi]
-        dist = np.hypot(*(near - p).T)
-        k = int(np.argmin(dist))
-        offset[i] = dist[k]
-        if dist[k] <= max_offset_m:
-            pos = ref_cum[lo + k] + tt[k] * seg_len[lo + k]
-            last = max(last, pos) if started else pos
+        off, pos = course.nearest_in_window(xy[i], last)
+        offset[i] = off
+        if off <= max_offset_m:
+            last = max(last, pos)
             progress[i] = last
-            started = True
+            off_since = None
+        else:
+            off_since = own[i] if off_since is None else off_since
+            if own[i] - off_since > LOST_M:
+                floor, last = last - BACK_M, None
     return progress, offset
 
 

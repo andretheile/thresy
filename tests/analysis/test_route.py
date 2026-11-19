@@ -59,12 +59,19 @@ def test_compare_rejects_a_different_course() -> None:
 def test_project_progress_handles_off_route_points() -> None:
     import numpy as np
 
-    ref = np.array([[0.0, 0.0], [0.0, 100.0], [0.0, 200.0]])
-    cum = np.array([0.0, 100.0, 200.0])
-    pts = np.array([[1.0, 10.0], [100.0, 50.0], [2.0, 150.0]])
-    prog, off = rt.project_progress(ref, cum, pts)
-    assert prog[0] == pytest.approx(10) and np.isnan(prog[1]) and prog[2] == pytest.approx(150)
-    assert off[1] == pytest.approx(100)
+    # the course runs 1 km north; the other track first crosses it from west to east at 600 m
+    # (which must not lock the progress there), then joins it at the start and follows it
+    ys = np.arange(0.0, 1001.0, 10.0)
+    ref = np.column_stack([np.zeros_like(ys), ys])
+    crossing = np.column_stack([np.arange(-300.0, 301.0, 10.0), np.full(61, 600.0)])
+    follow = np.column_stack([np.full(len(ys), 3.0), ys])
+    follow[50] = [100.0, 500.0]  # one point off the course
+    prog, off = rt.project_progress(ref, ys, np.vstack([crossing, follow]))
+    assert np.isnan(prog[:61]).all()
+    on = prog[61:]
+    assert on[0] == pytest.approx(0, abs=1) and on[-1] == pytest.approx(1000, abs=1)
+    assert np.isnan(on[50]) and off[61 + 50] == pytest.approx(100)
+    assert on[49] == pytest.approx(490, abs=1) and on[51] == pytest.approx(510, abs=1)
 
 
 @pytest.mark.db
