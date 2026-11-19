@@ -11,10 +11,15 @@ Record frames returned by :func:`load_records` use short column names:
 ``dt``    seconds since the previous sample (0 for the first)
 ``paused`` the gap before this sample is longer than :data:`PAUSE_GAP_S` (the watch was paused)
 ``timer`` cumulative timer time: like ``t`` but without paused gaps
-``still`` the athlete stood still while the timer ran (``speed`` < :data:`STILL_SPEED_MPS`)
+``still`` the athlete stands still at this sample (``speed`` < :data:`STILL_SPEED_MPS`)
+``still_s`` seconds of standing that start at this sample: the time to the next sample when
+          ``still`` and the timer kept running
+``stop_s`` seconds stopped that start at this sample: ``still_s`` plus a paused gap that
+          follows it
 ========  ==================================================================================
 
 Times between two samples are differences of ``timer`` (timer time) or ``t`` (wall clock).
+Stopped time between samples ``i`` and ``j`` is ``stop_s[i:j].sum()``.
 """
 
 from __future__ import annotations
@@ -265,7 +270,7 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     if "ts" in df and len(df):
         df["ts"] = pd.to_datetime(df["ts"], utc=True)
     if df.empty:
-        for col in ("dt", "timer"):
+        for col in ("dt", "timer", "still_s", "stop_s"):
             df[col] = pd.Series(dtype="float64")
         df["paused"] = pd.Series(dtype=bool)
         df["still"] = pd.Series(dtype=bool)
@@ -284,9 +289,13 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
         derived = (df["dist"].diff() / dt.replace(0.0, np.nan)).where(~paused)
         df["speed"] = df["speed"].fillna(derived)
     if "speed" in df:
-        df["still"] = (df["speed"].fillna(0.0) < STILL_SPEED_MPS) & ~paused
+        df["still"] = df["speed"].fillna(0.0) < STILL_SPEED_MPS
     else:
         df["still"] = False
+    dt_next = dt.shift(-1, fill_value=0.0)
+    paused_next = paused.shift(-1, fill_value=False)
+    df["still_s"] = dt_next.where(df["still"] & ~paused_next, 0.0)
+    df["stop_s"] = df["still_s"] + dt_next.where(paused_next, 0.0)
     return df
 
 

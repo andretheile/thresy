@@ -25,7 +25,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from thresy.analysis.activity import CLIMB_MIN_GAIN_M, turning_points
+from thresy.analysis.activity import CLIMB_MIN_GAIN_M, trim_flat, turning_points
 from thresy.analysis.data import (
     Activity,
     Conn,
@@ -208,7 +208,10 @@ def compare_frames(
     climbs = []
     if not np.isnan(alt_course).all():
         pts = turning_points(alt_course, 10.0)
-        for s, e in pairwise(pts):
+        for s0, e0 in pairwise(pts):
+            if alt_course[e0] <= alt_course[s0]:
+                continue
+            s, e = trim_flat(alt_course, s0, e0)
             g = float(alt_course[e] - alt_course[s])
             x0, x1 = float(ref_cum[s]), float(ref_cum[e])
             if g < CLIMB_MIN_GAIN_M or x0 < start or x1 > end or x1 <= x0:
@@ -235,7 +238,7 @@ def compare_frames(
         if idx.size == 0:
             return 0.0
         part = df.iloc[idx[0] : idx[-1] + 1]
-        return float(part.loc[part["still"] | part["paused"], "dt"].sum())
+        return float(part["stop_s"].iloc[:-1].sum())
 
     total_a, total_b = time_a(end), time_b(end)
     grid = np.arange(start, end, 50.0)

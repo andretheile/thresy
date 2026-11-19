@@ -33,6 +33,9 @@ CLIMB_REVERSAL_M = 10.0
 """A climb ends once the smoothed altitude has dropped this far below its highest point."""
 CLIMB_MIN_GAIN_M = 25.0
 CLIMB_MIN_GRADE_PCT = 2.0
+CLIMB_TRIM_M = 0.5
+"""A climb starts at the last sample within this many metres of its lowest point (flat
+stretches before the hill are not part of it)."""
 STOP_MIN_S = 20.0
 """Stops shorter than this are counted in the totals but not listed."""
 
@@ -89,8 +92,8 @@ class Profile:
         self.t = df["t"].to_numpy(dtype="float64")
         self.alt = smooth_altitude(df)
         self.up, self.down = ascent_profile(self.alt)
-        stopped = (df["still"] | df["paused"]).to_numpy()
-        self.stopped = np.cumsum(np.where(stopped, df["dt"].to_numpy(), 0.0))
+        stop_s = df["stop_s"].to_numpy(dtype="float64")
+        self.stopped = np.r_[0.0, np.cumsum(stop_s)]  # stopped before sample k: [:k]
 
     def span(self, i: int, j: int) -> Span:
         """Aggregates from sample ``i`` to sample ``j`` (inclusive)."""
@@ -254,6 +257,23 @@ def turning_points(alt: np.ndarray, reversal_m: float) -> list[int]:
     return sorted(set(points))
 
 
+def trim_flat(alt: np.ndarray, s: int, e: int, tol_m: float = CLIMB_TRIM_M) -> tuple[int, int]:
+    """Move the start of a climb (descent) from turning point ``s`` to the last sample within
+    ``tol_m`` of its lowest (highest) altitude before ``e``.
+
+    The zigzag in :func:`turning_points` ends a climb at the first sample of its top, but starts
+    it at the first sample of the low point before, so a flat stretch (or a small dip) before
+    the hill would otherwise count as part of it.
+    """
+    seg = alt[s : e + 1]
+    if alt[e] >= alt[s]:
+        near = np.flatnonzero(seg <= np.nanmin(seg) + tol_m)
+    else:
+        near = np.flatnonzero(seg >= np.nanmax(seg) - tol_m)
+    new_s = s + int(near.max()) if near.size else s
+    return (new_s, e) if new_s < e else (s, e)
+
+
 def climbs(
     df: pd.DataFrame,
     *,
@@ -267,7 +287,8 @@ def climbs(
 
     The altitude is smoothed (centred mean over 15 samples) and cut at its turning points: a
     climb runs from a low point to the next high point and ends once the altitude has fallen
-    ``reversal_m`` below that high point. Kept are climbs with at least ``min_gain_m`` net gain
+    ``reversal_m`` below that high point; flat stretches at either end are trimmed
+    (:func:`trim_flat`). Kept are climbs with at least ``min_gain_m`` net gain
     and ``min_grade_pct`` average grade. ``vam`` is the climbing rate in metres per hour.
     """
     if df.empty:
@@ -277,13 +298,15 @@ def climbs(
         return []
     points = turning_points(p.alt, reversal_m)
     out = []
-    for s, e in pairwise(points):
-        gain = float(p.alt[e] - p.alt[s])
+    for s0, e0 in pairwise(points):
+        gain = float(p.alt[e0] - p.alt[s0])
         direction = "up" if gain > 0 else "down"
         if direction == "down" and not descents:
             continue
         if abs(gain) < min_gain_m:
             continue
+        s, e = trim_flat(p.alt, s0, e0)
+        gain = float(p.alt[e] - p.alt[s])
         span = p.span(s, e)
         if span.dist_m <= 0:
             continue
@@ -320,7 +343,7 @@ def stops(df: pd.DataFrame, activity: Activity | None = None, min_s: float = STO
     if df.empty:
         return {"paused_s": 0.0, "standing_s": 0.0, "stops": []}
     paused_s = float(df.loc[df["paused"], "dt"].sum())
-    standing_s = float(df.loc[df["still"], "dt"].sum())
+    standing_s = float(df["still_s"].sum())
     listed = []
     # paused gaps
     for idx in df.index[df["paused"]]:
@@ -333,7 +356,7 @@ def stops(df: pd.DataFrame, activity: Activity | None = None, min_s: float = STO
         groups = np.cumsum(np.r_[True, still[1:] != still[:-1]])
         for g in np.unique(groups[still]):
             rows = df[groups == g]
-            secs = float(rows["dt"].sum())
+            secs = float(rows["still_s"].sum())
             listed.append((float(rows["t"].iloc[0]), secs, rows.index[0], "standing"))
     listed = [s for s in listed if s[1] >= min_s]
     listed.sort()
@@ -368,7 +391,7 @@ def summarize(
     if total is not None:
         totals = {
             **total.as_dict(),
-            "moving_s": round(total.time_s - float(df.loc[df["still"], "dt"].sum())),
+            "moving_s": round(total.time_s - float(df["still_s"].sum())),
             "resp_rate": resp,
             "garmin_elev_gain_m": activity.elev_gain_m,
             "samples": len(df),
