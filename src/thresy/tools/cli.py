@@ -231,3 +231,10 @@ def sql_command(
         detail = str(exc).strip() or type(exc).__name__
         raise fail(detail, as_json=json_out) from exc
     emit(sql.as_json(result), as_json=json_out, text=sql.as_text(result))
+
+
+# coach weather, coach plan …, coach races … (thresy.tools.planning_cli)
+from thresy.tools import planning_cli as _planning  # noqa: E402
+
+app.registered_commands.extend(_planning.app.registered_commands)
+app.registered_groups.extend(_planning.app.registered_groups)
