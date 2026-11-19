@@ -14,6 +14,11 @@ from thresy.cli import JsonOption, emit, fail
 app = typer.Typer(help="Import data from other sources.", no_args_is_help=True)
 
 
+@app.callback()
+def _group() -> None:
+    """Import data from other sources."""
+
+
 class Part(StrEnum):
     activities = "activities"
     records = "records"
