@@ -14,7 +14,6 @@ from tests.analysis.synth import (
     M_PER_DEG,
     ORIGIN,
     T0,
-    Phase,
     hill_out_and_back,
     interval_phases,
     laps_for,
