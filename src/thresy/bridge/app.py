@@ -112,7 +112,8 @@ class Bridge:
     async def start(self, *, background: bool = True) -> None:
         """Recover from the previous process, start receiving, and (unless ``background`` is
         False, as in tests) start the outbox and event loops."""
-        self.workspace.mkdir(parents=True, exist_ok=True)
+        for directory in (self.workspace / "out", self.workspace / "inbox"):
+            directory.mkdir(parents=True, exist_ok=True)
         await self.recover()
         await self.transport.start(self.on_message)
         if background:
