@@ -92,10 +92,14 @@ Repetitions are found in this order (`--source auto`):
    are warm-up and cool-down.
 3. **Records.** The per-second speed (or power with `--signal power`) is smoothed with a
    centred 5 s median and a 5 s mean and split into fast and slow by two-means over the moving
-   samples. Accepted when the two groups are clearly separated (Ashman's D ≥ 2 and ratio ≥
+   samples. Accepted when the two groups are clearly separated (Ashman's D ≥ 3 and ratio ≥
    1.15); work is every stretch above the threshold, dips under 10 s are bridged and stretches
-   under `--min-work-s` (default 15 s) dropped. Use power for hill repeats: it rises uphill
-   where speed falls (but it also flags uphill jogging in a warm-up).
+   under `--min-work-s` (default 15 s) dropped. The result is rejected when the median break
+   between the stretches is shorter than 20 s, or when the reps do not end with a heart rate at
+   least 5 bpm above the end of the recoveries (mean of the last 30 s of each rep against the
+   last 15 s of the recovery after it): the fast downhills of a hilly easy run look like reps
+   by speed but lower the heart rate. Use power for hill repeats: it rises uphill where speed
+   falls (but it also flags uphill jogging in a warm-up).
 
 Per rep, from the records inside the rep: timer time, distance, pace, average and maximum heart
 rate, heart rate over the **last 30 s**, heart rate at the end (last 5 s), **drop in the first

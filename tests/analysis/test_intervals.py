@@ -130,7 +130,10 @@ def test_matches() -> None:
 def test_compare_sessions_finds_sessions_of_the_same_kind(conn) -> None:
     put_activity(conn, 101, records(interval_phases()), t0=T0)
     # 1 km reps on another day
-    km = [Phase(600, speed=3.0)] + [Phase(220, speed=4.6), Phase(120, speed=2.8)] * 4
+    km = [Phase(600, speed=3.0)] + [
+        Phase(220, speed=4.6, hr=(150, 170)),
+        Phase(120, speed=2.8, hr=(170, 145)),
+    ] * 4
     km += [Phase(400, speed=3.0)]
     put_activity(conn, 102, records(km), t0=T0.replace(day=10))
     put_activity(conn, 103, records([Phase(2400, speed=3.0)]), t0=T0.replace(day=12))
@@ -154,3 +157,12 @@ def test_laps_round_trip_through_the_database(conn) -> None:
     assert list(laps["t_start"][:2]) == [0.0, 600.0]
     det = iv.detect(df, laps)
     assert det.source == "laps" and [s for s, _ in det.work] == rep_starts()
+
+
+def test_fast_stretches_without_a_heart_rate_rise_are_not_reps() -> None:
+    # a hilly easy run: slow uphills raise the heart rate, fast downhills lower it
+    phases = []
+    for _ in range(6):
+        phases += [Phase(240, speed=2.6, hr=(135, 150)), Phase(200, speed=3.8, hr=(150, 132))]
+    det = iv.detect_from_records(frame(records(phases)))
+    assert det.source == "none" and "heart-rate rise" in det.note

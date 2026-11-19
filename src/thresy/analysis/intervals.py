@@ -18,7 +18,10 @@ Detection (``source="auto"`` tries these in order):
    over the moving samples. Accepted when the groups are clearly separated (Ashman's
    D >= :data:`MIN_SEPARATION` and ratio >= :data:`MIN_RATIO`). Work = stretches above the
    threshold; dips shorter than :data:`MERGE_GAP_S` are bridged and stretches shorter than
-   :data:`MIN_WORK_S` dropped. Edges found this way trail the athlete's lap presses by about
+   :data:`MIN_WORK_S` dropped. Rejected when the median break between the stretches is
+   shorter than :data:`MIN_RECOVERY_S` or the reps do not end at least :data:`MIN_HR_LIFT`
+   bpm above the end of the recoveries (:func:`hr_lift`; fast downhills of a hilly easy run
+   lower the heart rate). Edges found this way trail the athlete's lap presses by about
    2-7 s (the time it takes to speed up or slow down), so laps are preferred when they exist.
 
 Per repetition (from the records inside the rep's time window): timer time, distance, pace,
@@ -34,6 +37,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import pairwise
 from typing import Any
 
 import numpy as np
@@ -56,11 +60,15 @@ from thresy.analysis.fmt import rounded
 
 MIN_WORK_S = 15.0
 MERGE_GAP_S = 10.0
-MIN_SEPARATION = 2.0
+MIN_SEPARATION = 3.0
 MIN_RATIO = 1.15
 MIN_MANUAL_LAPS = 3
 POWER_COVERAGE = 0.8
 HR_DROP_AFTER_S = 60.0
+MIN_HR_LIFT = 5.0
+MIN_RECOVERY_S = 20.0
+"""Detection from records requires the median recovery to last at least this long."""
+"""Detection from records requires reps to end at least this much higher than recoveries."""
 PREFILTER_SPEED_CV = 0.10
 """Session comparison only runs detection on runs with laps from a workout or lap presses, or
 whose speed varies (coefficient of variation of moving speed at least this)."""
@@ -241,7 +249,35 @@ def detect_from_records(
         segs.append((float(t[i]), float(end_t)))
     if len(segs) < 2:
         return Detection("none", signal, threshold=threshold, note="fewer than two work stretches")
+    gaps = [b[0] - a[1] for a, b in pairwise(segs)]
+    if float(np.median(gaps)) < MIN_RECOVERY_S:
+        note = f"fast stretches with too short breaks (median {np.median(gaps):.0f} s)"
+        return Detection("none", signal, threshold=threshold, note=note)
+    lift = hr_lift(df, segs)
+    if lift is not None and lift < MIN_HR_LIFT:
+        note = f"fast stretches without the heart-rate rise of reps (lift {lift:.0f} bpm)"
+        return Detection("none", signal, threshold=threshold, note=note)
     return Detection("records", signal, segs, threshold)
+
+
+def hr_lift(df: pd.DataFrame, segs: list[tuple[float, float]]) -> float | None:
+    """Mean heart rate over the last 30 s of the reps (all but the last) minus the mean over
+    the last 15 s of the recoveries after them. Real reps end high and recoveries end lower;
+    fast downhill stretches of an easy run do the opposite. ``None`` without heart rate."""
+    if "hr" not in df or df["hr"].notna().mean() < 0.5 or len(segs) < 2:
+        return None
+    t = df["t"].to_numpy()
+    hr = df["hr"].to_numpy(dtype="float64")
+
+    def mean_in(lo: float, hi: float) -> float:
+        sel = (t >= lo) & (t < hi) & ~np.isnan(hr)
+        return float(hr[sel].mean()) if sel.any() else float("nan")
+
+    ends = [mean_in(e - 30, e) for _, e in segs[:-1]]
+    recs = [mean_in(nxt - 15, nxt) for (_, _), (nxt, _) in pairwise(segs)]
+    if np.isnan(ends).all() or np.isnan(recs).all():
+        return None
+    return float(np.nanmean(ends) - np.nanmean(recs))
 
 
 def detect(
