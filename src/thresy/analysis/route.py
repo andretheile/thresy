@@ -176,9 +176,7 @@ def compare_frames(
             return None
         return round(float(np.interp(x1, ref_cum, up) - np.interp(x0, ref_cum, up)), 1)
 
-    def hr_between(
-        df: pd.DataFrame, x: np.ndarray, prog: np.ndarray, x0: float, x1: float
-    ) -> float | None:
+    def hr_between(df: pd.DataFrame, prog: np.ndarray, x0: float, x1: float) -> float | None:
         sel = (prog >= x0) & (prog < x1)
         return mean_or_none(df.loc[sel, "hr"], 0) if "hr" in df else None
 
@@ -201,8 +199,8 @@ def compare_frames(
                 "time_b_s": round(sb, 1),
                 "delta_s": round(sb - sa, 1),
                 "cum_delta_s": round(cum_delta, 1),
-                "hr_a": hr_between(da, xa, prog_a, x0, x1),
-                "hr_b": hr_between(db, xb, prog_b, x0, x1),
+                "hr_a": hr_between(da, prog_a, x0, x1),
+                "hr_b": hr_between(db, prog_b, x0, x1),
             }
         )
 
@@ -226,8 +224,8 @@ def compare_frames(
                     "time_a_s": round(sa, 1),
                     "time_b_s": round(sb, 1),
                     "delta_s": round(sb - sa, 1),
-                    "hr_a": hr_between(da, xa, prog_a, x0, x1),
-                    "hr_b": hr_between(db, xb, prog_b, x0, x1),
+                    "hr_a": hr_between(da, prog_a, x0, x1),
+                    "hr_b": hr_between(db, prog_b, x0, x1),
                 }
             )
 
@@ -252,8 +250,8 @@ def compare_frames(
         "time_a_s": round(total_a, 1),
         "time_b_s": round(total_b, 1),
         "delta_s": round(total_b - total_a, 1),
-        "hr_a": hr_between(da, xa, prog_a, start, end),
-        "hr_b": hr_between(db, xb, prog_b, start, end),
+        "hr_a": hr_between(da, prog_a, start, end),
+        "hr_b": hr_between(db, prog_b, start, end),
         "stopped_a_s": round(stopped(da, prog_a)),
         "stopped_b_s": round(stopped(db, prog_b)),
         "sections": sections,
@@ -262,7 +260,17 @@ def compare_frames(
         "curve": curve,
         "_tracks": {"a": (xa, ta - t0a), "b": (xb, tb - t0b)},
         "_profile": (ref_cum, alt_course),
+        "_hr_a": _smoothed_hr(da, prog_a),
+        "_hr_b": _smoothed_hr(db, prog_b),
     }
+
+
+def _smoothed_hr(df: pd.DataFrame, prog: np.ndarray) -> np.ndarray | None:
+    """Heart rate (30-sample mean) of the on-route samples, aligned with ``_tracks``."""
+    if "hr" not in df or df["hr"].isna().all():
+        return None
+    hr = df["hr"].rolling(30, center=True, min_periods=1).mean().to_numpy()
+    return hr[~np.isnan(prog)]
 
 
 # Finding activities on the same course --------------------------------------------------------
