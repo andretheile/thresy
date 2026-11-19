@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC
 
 import psycopg
@@ -35,6 +36,18 @@ def test_connect_defaults(conn) -> None:
     conn.execute(INSERT_RUN)
     start = conn.execute("SELECT start_utc FROM activities").fetchone()["start_utc"]
     assert start.tzinfo is not None and start.utcoffset() == UTC.utcoffset(start)
+
+
+def test_connect_async(test_db) -> None:
+    async def query(url: str, read_only: bool) -> dict:
+        async with await db.connect_async(url, read_only=read_only) as aconn:
+            cur = await aconn.execute(
+                "SELECT current_user AS u, current_setting('transaction_read_only') AS ro"
+            )
+            return await cur.fetchone()
+
+    assert asyncio.run(query(test_db.app_url, False)) == {"u": "coach_app", "ro": "off"}
+    assert asyncio.run(query(test_db.ro_url, True)) == {"u": "coach_ro", "ro": "on"}
 
 
 def test_ro_can_read(conn, ro_conn) -> None:
