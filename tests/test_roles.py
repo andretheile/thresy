@@ -1,7 +1,8 @@
 """coach_agent: exactly the rights of the roles table in docs/ARCHITECTURE.md.
 
-SELECT on everything; INSERT on outbox; INSERT, UPDATE, DELETE on planned_workouts, races,
-segments and segment_efforts; nothing else.
+SELECT on everything; INSERT on outbox and agent_requests (on agent_requests only the request
+columns kind and payload); INSERT, UPDATE, DELETE on planned_workouts, races, segments and
+segment_efforts; nothing else.
 """
 
 from __future__ import annotations
@@ -19,13 +20,24 @@ pytestmark = pytest.mark.db
 
 AGENT_WRITES = {
     "outbox": {"INSERT"},
+    "agent_requests": {"INSERT"},
     "planned_workouts": {"INSERT", "UPDATE", "DELETE"},
     "races": {"INSERT", "UPDATE", "DELETE"},
     "segments": {"INSERT", "UPDATE", "DELETE"},
     "segment_efforts": {"INSERT", "UPDATE", "DELETE"},
 }
-AGENT_SEQUENCES = {"outbox_id_seq", "planned_workouts_id_seq", "races_id_seq"}
+# Tables where the agent's INSERT is limited to some columns (all others take their defaults).
+AGENT_INSERT_COLUMNS = {"agent_requests": {"kind", "payload"}}
+AGENT_SEQUENCES = {
+    "outbox_id_seq",
+    "agent_requests_id_seq",
+    "planned_workouts_id_seq",
+    "races_id_seq",
+}
 TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+# Privileges that can also be granted per column. They are checked with
+# has_any_column_privilege, so a column-level grant on any table shows up in the matrix too.
+COLUMN_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")
 # Tables the coordinator named explicitly; the parametrised tests below cover all others too.
 PROTECTED = ("activities", "wellness_daily", "messages", "events", "sync_state")
 
@@ -61,11 +73,36 @@ def test_agent_table_privileges_are_exactly_the_contract(conn) -> None:
             p
             for p in TABLE_PRIVILEGES
             if conn.execute(
-                "SELECT has_table_privilege('coach_agent', %s, %s) AS ok", (f"public.{rel}", p)
+                "SELECT has_any_column_privilege('coach_agent', %(rel)s, %(p)s) AS ok"
+                if p in COLUMN_PRIVILEGES
+                else "SELECT has_table_privilege('coach_agent', %(rel)s, %(p)s) AS ok",
+                {"rel": f"public.{rel}", "p": p},
             ).fetchone()["ok"]
         }
         expected[rel] = {"SELECT"} | AGENT_WRITES.get(rel, set())
     assert actual == expected
+
+
+def test_agent_column_restricted_inserts(conn) -> None:
+    for table, allowed in AGENT_INSERT_COLUMNS.items():
+        table_level = conn.execute(
+            "SELECT has_table_privilege('coach_agent', %s, 'INSERT') AS ok", (f"public.{table}",)
+        ).fetchone()["ok"]
+        assert table_level is False, table
+        columns = conn.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_schema = 'public' AND table_name = %s",
+            (table,),
+        ).fetchall()
+        insertable = {
+            c["column_name"]
+            for c in columns
+            if conn.execute(
+                "SELECT has_column_privilege('coach_agent', %s, %s, 'INSERT') AS ok",
+                (f"public.{table}", c["column_name"]),
+            ).fetchone()["ok"]
+        }
+        assert insertable == allowed, table
 
 
 def test_agent_sequence_privileges(conn) -> None:
@@ -114,6 +151,30 @@ def test_agent_can_queue_outbox_messages_but_not_change_them(conn, agent_conn) -
         "text": "hello",
         "sent_at": None,
     }
+
+
+def test_agent_can_create_requests_but_not_change_them(conn, agent_conn) -> None:
+    row = agent_conn.execute(
+        "INSERT INTO agent_requests (kind, payload) VALUES ('sync_now', '{}') RETURNING id"
+    ).fetchone()
+    assert row["id"] == 1
+    # The agent reads its request back (that is how `coach sync request --wait` polls).
+    mine = agent_conn.execute("SELECT status, result FROM agent_requests WHERE id = 1").fetchone()
+    assert mine == {"status": "pending", "result": None}
+    with pytest.raises(DENIED):
+        agent_conn.execute("UPDATE agent_requests SET status = 'done'")
+    with pytest.raises(DENIED):
+        agent_conn.execute("DELETE FROM agent_requests")
+    # Only kind and payload: no request that already looks finished, no chosen ids.
+    for statement in (
+        "INSERT INTO agent_requests (kind, status) VALUES ('sync_now', 'done')",
+        "INSERT INTO agent_requests (kind, result) VALUES ('sync_now', '{}')",
+        "INSERT INTO agent_requests (kind, handled_by) VALUES ('sync_now', 'me')",
+        "INSERT INTO agent_requests (id, kind) VALUES (99, 'sync_now')",
+    ):
+        with pytest.raises(DENIED):
+            agent_conn.execute(statement)
+    assert conn.execute("SELECT status FROM agent_requests").fetchall() == [{"status": "pending"}]
 
 
 def test_agent_can_manage_plans_races_and_segments(conn, agent_conn) -> None:
