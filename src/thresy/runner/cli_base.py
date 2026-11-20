@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -104,6 +105,9 @@ class StreamParser(ABC):
         self.terminal_seen = False
         self.garbage: deque[str] = deque(maxlen=5)
         self.garbage_count = 0
+        self.credential_expires_at: datetime | None = None
+        """Set by a parser whose harness reports when its credential ends; goes into every
+        result built afterwards (RunResult.credential_expires_at)."""
 
     def feed_line(self, line: str) -> list[RunEvent]:
         line = line.strip()
@@ -149,6 +153,7 @@ class StreamParser(ABC):
             duration_s=0.0,  # filled in by RunHandle
             runner=self.runner,
             model=self.model,
+            credential_expires_at=self.credential_expires_at,
         )
 
     def error(self, kind: ErrorKind, detail: str, **kw: Any) -> RunResult:

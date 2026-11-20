@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 from thresy.runner import (
     AgentRunner,
@@ -77,6 +78,14 @@ def test_scripted_final(tmp_path):
     )
     assert result.text == "given" and result.session_id  # session filled in
     assert len(events) == 2
+
+
+def test_reports_the_credential_end_it_was_given(tmp_path):
+    expires = datetime(2030, 2, 1, tzinfo=UTC)
+    _, result = run_collect(FakeRunner(credential_expires_at=expires).run(req(tmp_path)))
+    assert result.credential_expires_at == expires
+    _, result = run_collect(FakeRunner(fail="auth").run(req(tmp_path)))
+    assert result.credential_expires_at is None
 
 
 def test_callable_script(tmp_path):

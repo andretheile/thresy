@@ -39,15 +39,25 @@ class BackupSettings(BaseSettings):
     """Where dumps and encrypted copies are written before the upload (default: the system's
     temporary directory). Needs about twice the size of a dump."""
     backup_at: str = "03:30"
-    """Local time (``COACH_TZ``) of the nightly backup (``coach backup schedule``)."""
+    """Local time (``COACH_TZ``) of the scheduled backup (``coach backup schedule``)."""
+    backup_weekdays: str = "daily"
+    """Days of the scheduled backup: ``daily``, or weekday names such as ``sun`` or
+    ``mon,thu`` (English, three letters or in full, any case)."""
     backup_restore_check_days: int = Field(7, ge=0)
-    """``coach backup schedule`` also restores the night's dump into a scratch database when
-    the last restore check is older than this many days (0: never)."""
+    """``coach backup schedule`` also restores a run's dump into a scratch database when the
+    last restore check is this many days old (0: never). It can only happen during a backup,
+    so with fewer days than between two backups every backup includes one."""
 
     @field_validator("backup_at")
     @classmethod
     def _check_at(cls, value: str) -> str:
         parse_time(value)
+        return value
+
+    @field_validator("backup_weekdays")
+    @classmethod
+    def _check_weekdays(cls, value: str) -> str:
+        parse_weekdays(value)
         return value
 
     @property
@@ -57,6 +67,44 @@ class BackupSettings(BaseSettings):
     @property
     def at(self) -> time:
         return parse_time(self.backup_at)
+
+    @property
+    def weekdays(self) -> frozenset[int]:
+        """Weekday numbers of the scheduled backup (Monday 0, as ``date.weekday()``)."""
+        return parse_weekdays(self.backup_weekdays)
+
+
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_FULL_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def parse_weekdays(value: str) -> frozenset[int]:
+    """``daily`` or weekday names separated by commas or spaces -> weekday numbers."""
+    days: set[int] = set()
+    for word in re.split(r"[,\s]+", value.strip().lower()):
+        if not word:
+            continue
+        if word == "daily":
+            days.update(range(7))
+        elif word in WEEKDAYS:
+            days.add(WEEKDAYS.index(word))
+        elif word in _FULL_NAMES:
+            days.add(_FULL_NAMES.index(word))
+        else:
+            raise ValueError(
+                f"unknown weekday {word!r} in {value!r}: expected daily or weekday names such as "
+                f"sun or mon,thu ({', '.join(WEEKDAYS)})"
+            )
+    if not days:
+        raise ValueError("no weekday given: expected daily or weekday names such as sun")
+    return frozenset(days)
+
+
+def describe_weekdays(days: frozenset[int]) -> str:
+    """``daily`` or the names in week order (``mon, thu``)."""
+    if len(days) == 7:
+        return "daily"
+    return ", ".join(WEEKDAYS[day] for day in sorted(days))
 
 
 def parse_time(value: str) -> time:

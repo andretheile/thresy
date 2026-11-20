@@ -208,7 +208,9 @@ def test_typing_indicator_repeats_while_busy(transport, bot, monkeypatch) -> Non
     async def scenario() -> None:
         await transport.set_busy(CHAT, True)
         await transport.set_busy(CHAT, True)  # idempotent
-        await asyncio.sleep(0.05)
+        async with asyncio.timeout(10):  # repeats, however slowly the loop gets to run
+            while len(bot.named("send_chat_action")) < 2:
+                await asyncio.sleep(0.005)
         await transport.set_busy(CHAT, False)
         count = len(bot.named("send_chat_action"))
         await asyncio.sleep(0.03)

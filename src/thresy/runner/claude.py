@@ -97,6 +97,11 @@ class ClaudeStreamParser(StreamParser):
             self.terminal_seen = True
             if isinstance(obj.get("session_id"), str):
                 self.session_id = obj["session_id"]
+            # Only for a stored claude.ai login; absent for CLAUDE_CODE_OAUTH_TOKEN (setup-token),
+            # an API key or another provider (docs/runners.md, "Credential expiry").
+            expires = _parse_time(obj.get("credential_expires_at"))
+            if expires is not None:
+                self.credential_expires_at = expires.astimezone(UTC)
             return []
         # user (tool results), stream_event, and anything new: nothing to show.
         return []
@@ -149,7 +154,7 @@ class ClaudeStreamParser(StreamParser):
         res = self._result
         if res is None:
             return self.failure_from_exit(exit, self._api_error_text, cost_usd=cost, usage=usage)
-        self._warn_on_expiry(res.get("credential_expires_at"))
+        self._warn_on_expiry()
         failed = bool(res.get("is_error")) or res.get("subtype") != "success"
         if not failed:
             text = res.get("result")
@@ -228,11 +233,10 @@ class ClaudeStreamParser(StreamParser):
             raw = {k: v for k, v in raw.items() if k != "iterations"}
         return cost, usage_dict(raw, _USAGE_KEYS)
 
-    @staticmethod
-    def _warn_on_expiry(value: Any) -> None:
-        expires = _parse_time(value)
+    def _warn_on_expiry(self) -> None:
+        expires = self.credential_expires_at
         if expires and expires - datetime.now(UTC) < EXPIRY_WARNING:
-            log.warning("claude: the login expires at %s; renew it", value)
+            log.warning("claude: the login expires at %s; renew it", expires.isoformat())
 
 
 class ClaudeRunner(CliRunner):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,20 @@ def parse_hhmm(value: str) -> time:
     if hour > 23 or minute > 59:
         raise ValueError(f"not a time of day: {value!r}")
     return time(hour, minute)
+
+
+def parse_expiry(value: str, zone: tzinfo = UTC) -> datetime:
+    """``2027-11-20`` (the start of that day in ``zone``, so a warning is never late) or an
+    ISO 8601 time (without an offset: in ``zone``). Raises ValueError."""
+    text = value.strip()
+    try:
+        day = date.fromisoformat(text)
+    except ValueError:
+        pass
+    else:
+        return datetime.combine(day, time.min, tzinfo=zone)
+    moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return moment if moment.tzinfo else moment.replace(tzinfo=zone)
 
 
 @dataclass(frozen=True)
@@ -107,6 +121,15 @@ class BridgeSettings(BaseSettings):
     row (``COACH_SYNC_FAIL_EVENT_AFTER``), so 1 already ignores one-off blips."""
     bridge_sync_failed_window_h: float = 6
 
+    bridge_credential_warn_days: float = 21
+    """Tell the athlete this many days before the agent's model credential expires, then about
+    weekly and once more two days before the end (docs/bridge.md). 0 turns the notices off."""
+    bridge_credential_expires: str | None = None
+    """When the model credential expires, for a credential whose harness does not report it
+    (a Claude Code token from ``claude setup-token`` is valid for one year): a date
+    (``2027-11-20``, the start of that day in ``COACH_TZ``) or an ISO 8601 time. A date the
+    runner reports wins. Unset: only reported dates count."""
+
     bridge_run_timeout_s: float = 900
     bridge_chat_tier: ModelTier = "smart"
     bridge_proactive_tier: ModelTier = "smart"
@@ -155,6 +178,19 @@ class BridgeSettings(BaseSettings):
     def _check_quiet(cls, value: str) -> str:
         QuietHours.parse(value)
         return value
+
+    @field_validator("bridge_credential_expires")
+    @classmethod
+    def _check_expires(cls, value: str | None) -> str | None:
+        if value is not None and value.strip():
+            try:
+                parse_expiry(value)
+            except ValueError:
+                raise ValueError(
+                    f"expected a date (2027-11-20) or an ISO 8601 time, got {value!r}"
+                ) from None
+            return value.strip()
+        return None
 
     @field_validator("bridge_chat_effort", "bridge_proactive_effort", mode="before")
     @classmethod

@@ -56,7 +56,9 @@ The timeout is enforced by a producer task, so it holds even while the consumer 
 
 ### Results and error kinds
 
-`RunResult` fields: `ok`, `text` (final answer; on failure whatever assistant text arrived before it), `session_id`, `error_kind`, `error_detail`, `cost_usd`, `usage`, `duration_s`, `runner`, `model`.
+`RunResult` fields: `ok`, `text` (final answer; on failure whatever assistant text arrived before it), `session_id`, `error_kind`, `error_detail`, `cost_usd`, `usage`, `duration_s`, `runner`, `model`, `credential_expires_at`.
+
+`credential_expires_at` is when the credential the harness used ends for good (an aware UTC `datetime`), if the harness says so with its result; `None` when it does not know or does not tell, which is the common case. Only the Claude Code adapter fills it, and only for some logins (see [Credential expiry](#credential-expiry)). A parser sets `StreamParser.credential_expires_at`, and every result it builds afterwards carries it. The bridge uses it to tell the athlete before the agent stops working (docs/bridge.md, "Before the model credential expires").
 
 | `error_kind` | Meaning | What to tell the user |
 |---|---|---|
@@ -201,7 +203,7 @@ What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). 
 - On resume, `result.total_cost_usd` and `modelUsage` include the earlier runs of the session. The result also carries `model_usage_since_last_result`, which covers only this run; the adapter computes `cost_usd` from it (falling back to `total_cost_usd` on versions without it). `result.usage` is already per run.
 - An API failure ends with `subtype: "success"` but `is_error: true`, plus `api_error_status`, `api_error_type` and `terminal_reason: "api_error"`; the synthetic assistant message carries `error: "authentication_failed"`. The process exits with code 1.
 - The `system/init` event reports `apiKeySource: "none"` for a claude.ai login.
-- The result carries `credential_expires_at`; the adapter logs a warning when it is less than three days away.
+- The result carried `credential_expires_at` (these runs used a stored claude.ai login; see [Credential expiry](#credential-expiry)).
 - A `rate_limit_event` appears on every run (status `allowed` with utilisation); only `status: "rejected"` is treated as a failure signal.
 - The fourth run took 9.9 s of wall time for a one-word answer (the API part of earlier runs was about 2.5 s). The CLI exited on its own within the 10 s exit wait; how the time splits between startup and shutdown on the development machine (which has user-level plugins and connectors) was not measured.
 
@@ -215,6 +217,22 @@ What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). 
 **Never pass `--bare`** and never set `CLAUDE_CODE_SIMPLE=1`: bare mode does not read `CLAUDE_CODE_OAUTH_TOKEN` or the stored login. The adapter refuses both in its configuration, drops `CLAUDE_CODE_SIMPLE` from the inherited environment, and the healthcheck warns if it is set.
 
 **Risk: `--bare` becoming the default.** The headless docs say bare mode "will become the default for `-p` in a future release". As of 2.1.327 there is no documented flag or variable to opt out explicitly (`CLAUDE_CODE_SIMPLE=1` turns bare mode on; nothing documents `0` as an opt-out). If that release ships, runs will fail with `error_kind="auth"` right away and the healthcheck will still look fine. Before upgrading Claude Code in the image, read the changelog for the opt-out and add it to `COACH_CLAUDE_ARGS`; the image pins the Claude Code version.
+
+### Credential expiry
+
+The result message of `claude -p` (stream-json and json) can carry `credential_expires_at`, an ISO 8601 instant such as `2026-12-03T20:14:46.229Z`. The Claude Code 2.1.318 release notes introduced it: "Added the date a stored claude.ai sign-in ends to `claude auth status` (`loginExpiresAt`) and to `claude -p` JSON results (`credential_expires_at`)". Older versions never report it. Claude Code's documentation pages do not describe it; the Agent SDK's type definition does (`@anthropic-ai/claude-agent-sdk`, `sdk.d.ts`, `SDKResultMessage`, checked in version 0.3.329):
+
+> When the claude.ai credential this process's requests send ends for good, as an ISO 8601 instant, read as the result is written. For a stored claude.ai login it is the end of the login's refresh chain as stored at sign-in, which renewing the access token does not move. That date is the server's when it sent one and otherwise a 30-day estimate, and the real end can be up to 3 days earlier. The server is not asked, so a login revoked early still shows its date, and a date in the past means the login has probably ended, not that it has. Absent when no date is known, for every other credential (an API key, a token from the environment, another provider), on results this process did not number, and from older producers.
+
+So, by login kind (what `claude auth status` shows for a token or an API key is from a published third-party test of 2.1.318, not from Anthropic):
+
+| Login | `credential_expires_at` | `claude auth status --json` |
+|---|---|---|
+| Stored claude.ai login (`claude auth login`) | the end of the login, possibly a 30-day estimate; can be up to 3 days late | `loginExpiresAt` with the same date |
+| `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`, valid one year) | absent | `authMethod: "oauth_token"`, no date |
+| `ANTHROPIC_API_KEY`, other providers | absent | no date |
+
+The adapter passes the date on as `RunResult.credential_expires_at` and logs a warning when it is less than three days away. With the token that docs/deploy.md sets up, no date arrives: the bridge then relies on `COACH_BRIDGE_CREDENTIAL_EXPIRES` (docs/bridge.md). The field in the captured fixtures means those runs used a stored login; no run with a setup token was captured, so its absence there rests on the SDK's description. To see what a deployment's CLI reports, run `coach runner check` (it shows `login valid until …` when `claude auth status` names a date) or look for `credential_expires_at` in the final event of `coach runner run --json` (one small model request).
 
 ### Other things to know
 

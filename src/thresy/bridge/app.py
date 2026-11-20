@@ -30,6 +30,7 @@ from .agent import AgentService, BusyTracker
 from .chat import ChatWorker, Job, Pending
 from .clock import Clock, SystemClock
 from .commands import Commands, parse_command
+from .credential import CredentialWatch
 from .events import EventDispatcher
 from .outbox import OutboxDeliverer
 from .repo import Repo, Row
@@ -64,6 +65,15 @@ class Bridge:
             transport=transport.name,
         )
         self.busy = BusyTracker(transport)
+        self.credential = CredentialWatch(
+            repo=repo,
+            bridge_settings=bridge_settings,
+            clock=self.clock,
+            zone=self.prompt_env.zone,
+            language=settings.language,
+            default_chat=lambda: transport.default_chat_id,
+            notify=self.reply,
+        )
         self.outbox = OutboxDeliverer(
             repo=repo,
             transport=transport,
@@ -80,6 +90,7 @@ class Bridge:
             busy=self.busy,
             prompt_env=self.prompt_env,
             wake_outbox=self.outbox.wake,
+            credential=self.credential,
         )
         self.commands = Commands(
             repo=repo,
@@ -91,6 +102,7 @@ class Bridge:
             busy=self.busy,
             reply=self.reply,
             is_working=self.is_working,
+            credential=self.credential,
         )
         self.events = EventDispatcher(
             repo=repo,
@@ -101,6 +113,7 @@ class Bridge:
             default_chat=lambda: transport.default_chat_id,
             enqueue=self.enqueue_job,
             notify=self.reply,
+            credential=self.credential,
         )
         self.workers: dict[str, ChatWorker] = {}
         self.stopping = False

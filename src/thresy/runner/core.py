@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
@@ -84,6 +85,10 @@ class RunResult:
     duration_s: float
     runner: str
     model: str | None
+    credential_expires_at: datetime | None = None
+    """When the credential the harness used ends for good (aware, UTC), if the harness says so
+    with its result; None when it does not know or does not tell (most credentials: see
+    docs/runners.md). Callers use it to warn before the agent stops working."""
 
 
 @dataclass(frozen=True)

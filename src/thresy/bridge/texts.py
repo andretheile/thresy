@@ -49,6 +49,19 @@ TEXTS: dict[str, dict[str, str]] = {
             " the backup service (coach backup status)."
         ),
         "last_error": "Last error: {error}",
+        "credential_expires": (
+            "The login of the coach's AI agent expires on {date} ({left}). After that the coach"
+            ' cannot answer until the owner renews it (docs/deploy.md, section "The model'
+            ' credential").'
+        ),
+        "credential_setting": (
+            "The date comes from COACH_BRIDGE_CREDENTIAL_EXPIRES: after renewing, set it to the"
+            " new date."
+        ),
+        "credential_today": "today",
+        "credential_tomorrow": "tomorrow",
+        "credential_in_days": "in {days} days",
+        "credential_expired": "expired on {date}",
         # Chat commands.
         "help": (
             "Commands:\n"
@@ -80,6 +93,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "status_sync_problem": "Sync failing, passes in a row: {value}",
         "status_garmin_login": "Garmin login: {value}",
         "status_runner": "Agent ({runner}): {value}",
+        "status_credential": "Agent login valid until: {value}",
         "status_runs": "Agent runs today: {count}, cost {cost}",
         "status_outbox": "Outbox: {pending} waiting, {failed} failed today",
         "status_busy": "Working on a request right now.",
@@ -147,6 +161,19 @@ TEXTS: dict[str, dict[str, str]] = {
             " Betreiber sollte den Backup-Dienst prüfen (coach backup status)."
         ),
         "last_error": "Letzter Fehler: {error}",
+        "credential_expires": (
+            "Die Anmeldung des KI-Agenten des Coaches läuft am {date} ab ({left}). Danach kann"
+            " der Coach nicht mehr antworten, bis der Betreiber sie erneuert (docs/deploy.md,"
+            ' Abschnitt "The model credential").'
+        ),
+        "credential_setting": (
+            "Das Datum stammt aus COACH_BRIDGE_CREDENTIAL_EXPIRES: Nach dem Erneuern dort das"
+            " neue Datum eintragen."
+        ),
+        "credential_today": "heute",
+        "credential_tomorrow": "morgen",
+        "credential_in_days": "in {days} Tagen",
+        "credential_expired": "abgelaufen am {date}",
         "help": (
             "Befehle:\n"
             "/status – Stand von Sync, Agent und Zustellung\n"
@@ -178,6 +205,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "status_sync_problem": "Sync schlägt fehl, Durchläufe in Folge: {value}",
         "status_garmin_login": "Garmin-Anmeldung: {value}",
         "status_runner": "Agent ({runner}): {value}",
+        "status_credential": "Anmeldung des Agenten gültig bis: {value}",
         "status_runs": "Agent-Läufe heute: {count}, Kosten {cost}",
         "status_outbox": "Ausgang: {pending} wartend, {failed} heute fehlgeschlagen",
         "status_busy": "Arbeite gerade an einer Anfrage.",

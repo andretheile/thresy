@@ -1,6 +1,7 @@
 """Chat commands the bridge answers itself, without an agent run.
 
-``/status`` (sync, agent health, today's runs and cost, outbox), ``/sync`` (asks the sync
+``/status`` (sync, agent health and how long its login is valid, today's runs and cost,
+outbox), ``/sync`` (asks the sync
 service through ``agent_requests`` and reports the result), ``/new`` (fresh session) and
 ``/help`` (``/start``, which Telegram sends on first contact, is the same). Other words
 starting with ``/`` go to the agent like any message.
@@ -21,6 +22,7 @@ from thresy.runner import AgentRunner
 
 from .agent import AgentService, BusyTracker
 from .clock import Clock
+from .credential import CredentialWatch
 from .repo import Repo
 from .settings import BridgeSettings
 from .texts import t
@@ -52,6 +54,7 @@ class Commands:
         busy: BusyTracker,
         reply: Callable[[str, str], Awaitable[None]],
         is_working: Callable[[str], bool],
+        credential: CredentialWatch | None = None,
     ) -> None:
         self.repo = repo
         self.runner = runner
@@ -62,6 +65,7 @@ class Commands:
         self.busy = busy
         self.reply = reply
         self.is_working = is_working
+        self.credential = credential
         self.sync_poll_s = 2.0
 
     @property
@@ -156,6 +160,8 @@ class Commands:
         except Exception as exc:
             value = f"{t(lang, 'not_ok')} – {type(exc).__name__}"
         lines.append(t(lang, "status_runner", runner=self.runner.name, value=value))
+        if self.credential is not None:
+            lines.append(await self.credential.status_line(now))
 
         runs = await self.repo.run_stats(midnight)
         cost = f"${runs['cost']:.2f}" if runs["cost"] is not None else "–"

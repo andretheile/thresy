@@ -2,7 +2,8 @@
 
 Tables used: ``messages``, ``agent_sessions``, ``agent_runs``, ``outbox``, ``events``,
 ``agent_requests`` and ``sync_state`` (keys prefixed ``bridge:`` for the bridge's own small
-state: the day of the last morning briefing and when each notification kind was last sent).
+state: the day of the last morning briefing, when each notification kind was last sent, and
+when the agent's model credential ends).
 Reads of Garmin data (``wellness_daily``, ``activities``, ``runs``) serve the status command
 and the numbers-only briefing.
 

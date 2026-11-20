@@ -17,7 +17,6 @@ import os
 import pwd
 import stat
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +28,13 @@ from thresy.runner.cli_base import private_file
 from thresy.runner.isolation import UserSwitch, switch_from_env
 from thresy.runner.process import ChildProcess
 
-from .runner_testkit import read_json, run_collect, spec_env, write_fake_cli
+from .runner_testkit import (
+    read_json,
+    run_collect,
+    spec_env,
+    start_clock_when_ready,
+    write_fake_cli,
+)
 from .test_runner_process import GRACE, LineRunner, assert_group_gone, out
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX only")
@@ -94,7 +99,9 @@ def helper_log(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def make(tmp_path: Path, switch: UserSwitch, **spec: Any) -> tuple[LineRunner, Path]:
+def make(
+    tmp_path: Path, switch: UserSwitch, *, grace: float = GRACE, **spec: Any
+) -> tuple[LineRunner, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     record = tmp_path / "record.json"
@@ -102,7 +109,7 @@ def make(tmp_path: Path, switch: UserSwitch, **spec: Any) -> tuple[LineRunner, P
     from thresy.runner import HarnessConfig
 
     harness = HarnessConfig(binary=str(write_fake_cli(bin_dir)), env=spec_env(**spec))
-    return LineRunner(harness, kill_grace_s=GRACE, switch=switch), record
+    return LineRunner(harness, kill_grace_s=grace, switch=switch), record
 
 
 def req(tmp_path: Path, **kw: Any) -> RunRequest:
@@ -213,16 +220,27 @@ def test_child_gets_the_agent_umask(tmp_path):
     assert stat.S_IMODE(created.stat().st_mode) == 0o660  # 0666 & ~007
 
 
-def test_timeout_signals_the_group_through_the_helper(tmp_path):
+# The runs below start two Python processes (the stand-in helper, then the fake CLI); their
+# timeouts count only from the fake CLI's "ready" step (see start_clock_when_ready).
+
+
+def test_timeout_signals_the_group_through_the_helper(tmp_path, monkeypatch):
     switch, log = fake_helper(tmp_path)
     grandchild = tmp_path / "grandchild.pid"
+    ready = tmp_path / "ready"
     runner, record = make(
         tmp_path,
         switch,
         ignore_sigint=True,
         ignore_sigterm=True,
-        steps=[{"spawn": str(grandchild)}, out(session="s-2"), {"sleep": 600}],
+        steps=[
+            {"spawn": str(grandchild)},
+            out(session="s-2"),
+            {"ready": str(ready)},
+            {"sleep": 600},
+        ],
     )
+    start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(tmp_path, timeout_s=0.5)))
     assert result.error_kind == "timeout"
     assert_group_gone(record, int(grandchild.read_text()))
@@ -234,24 +252,36 @@ def test_timeout_signals_the_group_through_the_helper(tmp_path):
     assert all(set(c["env"]) <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"} for c in signals)
 
 
-def test_cooperative_stop_needs_only_sigint(tmp_path):
+def test_cooperative_stop_needs_only_sigint(tmp_path, monkeypatch):
+    # The CLI ends on SIGINT; the grace period is long so that this does not depend on how
+    # quickly a busy machine lets it (the stop goes on as soon as the group is gone).
     switch, log = fake_helper(tmp_path)
-    runner, record = make(tmp_path, switch, steps=[out(session="s-3"), {"sleep": 600}])
+    ready = tmp_path / "ready"
+    runner, record = make(
+        tmp_path,
+        switch,
+        grace=60,
+        steps=[out(session="s-3"), {"ready": str(ready)}, {"sleep": 600}],
+    )
+    start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(tmp_path, timeout_s=0.5)))
     assert result.error_kind == "timeout"
     assert_group_gone(record)
     assert [c["signal"] for c in helper_log(log) if "signal" in c] == [2]
 
 
-def test_failing_helper_still_tries_every_signal(tmp_path, caplog):
+def test_failing_helper_still_tries_every_signal(tmp_path, caplog, monkeypatch):
     switch, log = fake_helper(tmp_path, fail_signals=True)
-    runner, record = make(tmp_path, switch, steps=[out(session="s-4"), {"sleep": 600}])
-    start = time.monotonic()
+    ready = tmp_path / "ready"
+    runner, record = make(
+        tmp_path, switch, steps=[out(session="s-4"), {"ready": str(ready)}, {"sleep": 600}]
+    )
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(tmp_path, timeout_s=0.3)))
     assert result.error_kind == "timeout"
     assert [c["signal"] for c in helper_log(log) if "signal" in c] == [2, 15, 9]
     assert "could not signal process group" in caplog.text
-    assert time.monotonic() - start >= 0.3 + 2 * GRACE
+    assert clock.elapsed() >= 2 * GRACE  # SIGINT and SIGTERM each had their grace period
     # The stand-in refused to signal; stop and reap the CLI ourselves.
     info = read_json(record)
     os.killpg(info["pgid"], 9)

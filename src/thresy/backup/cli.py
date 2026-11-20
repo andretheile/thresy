@@ -131,22 +131,30 @@ def restore_check(
 
 @app.command("status")
 def status(json_out: JsonOption = False) -> None:
-    """Last backup, last failure, last restore check."""
+    """Schedule and next run, last backup, last failure, last restore check."""
+    from datetime import UTC, datetime
+
     from thresy import db
 
     from .core import get_status
+    from .schedule import describe, next_time
 
     try:
-        config, _, bs = _config(need_target=False)
+        config, settings, bs = _config(need_target=False)
         with db.connect(config.database_url) as conn:
             data = get_status(conn)
     except (*_errors(), OSError) as exc:
         raise fail(str(exc), as_json=json_out) from exc
     except Exception as exc:  # psycopg.OperationalError and friends
         raise fail(f"database: {exc}", as_json=json_out) from exc
+    zone = settings.zone
     data = {
         "configured_target": bs.backup_url,
         "encrypted": bool(bs.recipients),
+        "schedule": describe(bs, zone),
+        "next_run_at": next_time(datetime.now(UTC), bs, zone)
+        .astimezone(zone)
+        .isoformat(timespec="minutes"),
         **data,
     }
     emit(data, as_json=json_out, text=_status_text(data))
@@ -155,6 +163,11 @@ def status(json_out: JsonOption = False) -> None:
 def _status_text(data: dict[str, Any]) -> str:
     target = data.get("configured_target") or "not configured (COACH_BACKUP_URL)"
     lines = [f"target: {target}{' (encrypted with age)' if data.get('encrypted') else ''}"]
+    if data.get("schedule"):
+        lines.append(
+            f"schedule: {data['schedule']}; next run {data.get('next_run_at')} "
+            "(if the backup service is running)"
+        )
     if data.get("last_success_at"):
         result = data.get("last_result") or {}
         workspace = ""
@@ -189,7 +202,7 @@ def _status_text(data: dict[str, Any]) -> str:
 
 @app.command("schedule")
 def schedule() -> None:
-    """Run as a service: a backup every night at COACH_BACKUP_AT (local time)."""
+    """Run as a service: a backup at COACH_BACKUP_AT (local time) on COACH_BACKUP_WEEKDAYS."""
     import threading
 
     from . import schedule as service

@@ -1,8 +1,8 @@
 # Backups
 
-The `backup` service (`coach backup schedule`) backs up every night what cannot be fetched
-again: the database, the original FIT files, and the coach's memory files and kept analysis
-scripts. It writes to a Google Cloud Storage bucket (or a local directory) with a credential
+The `backup` service (`coach backup schedule`) backs up on a schedule (every night by default,
+or on chosen weekdays) what cannot be fetched again: the database, the original FIT files, and
+the coach's memory files and kept analysis scripts. It writes to a Google Cloud Storage bucket (or a local directory) with a credential
 that can **create objects and nothing else**, so a stolen key can neither read nor delete the
 backups. Optionally everything is encrypted with [age](https://age-encryption.org) before it
 leaves the server.
@@ -49,14 +49,33 @@ Not backed up, on purpose:
    already in the bucket are answered with "precondition failed" and counted as already there.
 4. The outcome goes to `sync_state` (`backup_status`). A failure raises a `backup_failed` event
    (at most one per UTC day), and the bridge tells the athlete, like a failing Garmin sync.
-5. Once a week (`COACH_BACKUP_RESTORE_CHECK_DAYS`) the run also restores its dump into a scratch
-   database on the same server, compares every table's row count with the manifest, and drops
-   the scratch database again (see [Testing a restore](#testing-a-restore)).
+5. Every `COACH_BACKUP_RESTORE_CHECK_DAYS` days (7) the run also restores its dump into a
+   scratch database on the same server, compares every table's row count with the manifest, and
+   drops the scratch database again (see [Testing a restore](#testing-a-restore)).
 
-The service runs at `COACH_BACKUP_AT` local time (default 03:30). Right after it starts it runs
-once if the last successful backup is missing or older than 26 hours. A failed run is retried
-after an hour, twice. Retention is not the application's business: the bucket's lifecycle
-rules delete old runs (below).
+### Schedule
+
+The service runs at `COACH_BACKUP_AT` local time (default 03:30, `COACH_TZ`) on the days in
+`COACH_BACKUP_WEEKDAYS`: `daily` (the default), or weekday names such as `sun` for once a week
+or `mon,thu` for twice (English, three letters or in full, any case; anything else stops the
+service at start with a message). Changes to and from daylight saving time keep the local time;
+a time that does not exist on such a day (02:30 when the clocks jump from 02:00 to 03:00) runs
+an hour later on the clock.
+
+Right after it starts, the service runs once (after a minute) if there is no successful backup
+since the last scheduled time: on a new deployment, or when the service was down or failed when
+a run was due. A restart after the last scheduled run succeeded changes nothing, also days later
+with weekly runs. A failed run is retried after an hour, twice; after that the next scheduled
+time is awaited.
+
+A restore check can only happen during a backup. A run includes one when the last successful
+check is `COACH_BACKUP_RESTORE_CHECK_DAYS` days old, counted with half a day's tolerance so that
+runs at the same time N days apart qualify. With a value no larger than the gap between two
+runs (the default 7 with weekly runs, for example), every run includes one; with 14 and weekly
+runs, every other run does; with daily runs and 7, one run a week.
+
+`coach backup status` shows the schedule and the next planned run. Retention is not the
+application's business: the bucket's lifecycle rules delete old runs (below).
 
 `pg_dump` and `pg_restore` must have the database's major version (PostgreSQL 16 in
 `compose.yml`): the image installs `postgresql-client-16` from the PostgreSQL project's
@@ -70,8 +89,9 @@ change the `db` image's major version, change `PG_MAJOR` in `compose.yml` with i
 | `COACH_BACKUP_URL` | `file:///backups` (in `compose.yml`) | `gs://<bucket>/<prefix>` or `file:///<absolute path>`. The default is the `backups` volume on the same server: it protects against mistakes, not against losing the server. |
 | `COACH_BACKUP_GCS_KEY_FILE` | none | Host path of the service-account key (Compose mounts it read-only at `/run/secrets/gcs-backup-key.json`, which is `COACH_BACKUP_GCS_CREDENTIALS` inside the container). |
 | `COACH_BACKUP_AGE_RECIPIENT` | none | age public key(s), comma-separated. Set: everything is encrypted. |
-| `COACH_BACKUP_AT` | `03:30` | Local time (`COACH_TZ`) of the nightly run. |
-| `COACH_BACKUP_RESTORE_CHECK_DAYS` | `7` | Restore check after a backup when the last one is older (0: never). |
+| `COACH_BACKUP_AT` | `03:30` | Local time (`COACH_TZ`) of the scheduled run. |
+| `COACH_BACKUP_WEEKDAYS` | `daily` | Days of the scheduled run: `daily` or weekday names (`sun`, `mon,thu`). |
+| `COACH_BACKUP_RESTORE_CHECK_DAYS` | `7` | A run includes a restore check when the last one is this many days old (0: never); see [Schedule](#schedule). |
 | `COACH_BACKUP_PG_BIN_DIR`, `COACH_BACKUP_AGE_BIN`, `COACH_BACKUP_WORK_DIR` | auto, `age`, system temp | Only for running `coach backup` outside the image. The work directory needs about twice the size of a dump. |
 | `BACKUP_MEM_LIMIT` | `256m` | Memory limit of the service. |
 
@@ -82,8 +102,9 @@ The service uses the `coach_app` database role, which needs `CREATEDB` for the r
 ## Commands
 
 ```sh
-docker compose exec backup coach backup status          # last success (with memory files and
-                                                        # kept scripts), failures, restore check
+docker compose exec backup coach backup status          # schedule and next run, last success
+                                                        # (with memory files and kept scripts),
+                                                        # failures, restore check
 docker compose exec backup coach backup run             # back up now (add --restore-check)
 docker compose exec backup coach backup restore-check   # restore a fresh dump into a scratch DB
 docker compose logs -f backup
@@ -153,11 +174,39 @@ gcloud storage buckets update gs://<BUCKET> --lifecycle-file=lifecycle.json
 gcloud storage buckets describe gs://<BUCKET> --format=json   # shows the lifecycle rules
 ```
 
-A dump of a few hundred MB per night times 90 days is tens of GB; lower the age if that is too
+What the runs take is one dump (plus the small memory and scripts archives) times the number of
+runs the delete rule keeps: with 90 days, nightly runs keep 90 dumps, a few hundred MB each, so
+tens of GB; weekly runs (`COACH_BACKUP_WEEKDAYS=sun`) keep 13. Lower the age if that is too
 much. Nearline has a 30-day minimum storage duration and charges for reads, which only happen in
 a restore. If you want protection even against a compromised owner account, add a bucket
 retention policy (`gcloud storage buckets update gs://<BUCKET> --retention-period=30d`); once
 locked it cannot be shortened, so read Google's documentation on bucket lock first.
+
+### Storage class for a small deployment
+
+For a deployment of a few GB, the cheapest choice is a cold storage class as the bucket's
+default, such as Archive: create the bucket with `--default-storage-class=ARCHIVE` instead of
+`STANDARD`, or change it later with `gcloud storage buckets update gs://<BUCKET>
+--default-storage-class=ARCHIVE` (that applies to objects uploaded afterwards). Every object the
+backup uploads then lands in Archive. What that means:
+
+- **Minimum storage duration.** Google's documentation lists 30 days for Nearline, 90 for
+  Coldline and 365 for Archive (none for Standard). An object deleted, replaced or rewritten
+  earlier is charged as if it had been stored for the minimum, and time in soft delete counts
+  towards it. So with Archive the delete rule for runs should be no shorter than 365 days (a
+  shorter one deletes earlier but saves nothing); with weekly runs that is 52 dumps. The rule
+  that moves FIT files to Nearline has nothing left to do and can go.
+- **Reading costs extra.** Cold classes charge a retrieval fee per GB read and more per
+  operation than Standard. The backup service never reads, so this only matters in a restore,
+  a drill (see [Testing a restore](#testing-a-restore)) and when an owner lists or downloads
+  objects. Archive data in Cloud Storage is available within milliseconds, like the other
+  classes, not after hours.
+- **The backup works the same.** The create-only credential and the create-only uploads
+  (`ifGenerationMatch=0`) behave alike in every class, and so does the "already uploaded" case:
+  the backup recognises it from the refused upload, without reading the object.
+
+For larger amounts, or if you expect to restore often, compare the classes on Google's pricing
+page before choosing.
 
 ### Putting the key on the server
 
@@ -191,9 +240,9 @@ Keep `thresy-backup.key` in at least two safe places (a password manager, a prin
 **without the private key the encrypted backups cannot be restored, by anyone**, and it must
 never be stored on the server, so a compromise of the server does not expose old backups.
 
-The server encrypts with the public key only. The weekly restore check therefore tests the dump
-before it is encrypted; testing an encrypted backup needs the private key and happens where the
-key is (below). Turning encryption on later uploads all FIT files again, encrypted; the
+The server encrypts with the public key only. The automatic restore check therefore tests the
+dump before it is encrypted; testing an encrypted backup needs the private key and happens where
+the key is (below). Turning encryption on later uploads all FIT files again, encrypted; the
 earlier unencrypted copies stay in the bucket until an owner deletes them
 (`gcloud storage rm "gs://<BUCKET>/<PREFIX>/fit/**/*.fit"`, which leaves the `.fit.age` objects).
 
@@ -201,7 +250,9 @@ earlier unencrypted copies stay in the bucket until an owner deletes them
 
 Three levels, from automatic to a full drill:
 
-1. **Automatic, weekly:** the backup service restores its fresh dump into a scratch database
+1. **Automatic, every `COACH_BACKUP_RESTORE_CHECK_DAYS` days** (with the next backup after
+   that, see [Schedule](#schedule)): the backup service restores its fresh dump into a scratch
+   database
    (`thresy_restore_check_<time>`), compares the row count of every table with the snapshot it
    dumped, and drops it. The result is in `coach backup status`; a failure is a backup failure.
    It proves that the dump is complete and restorable with the stack's PostgreSQL version. It
@@ -306,6 +357,10 @@ does in a throwaway container and runs the suite against the development databas
   FIT record makes every FIT upload fail until the record is rebuilt; check it once by running
   `coach backup run` twice after deleting the `backup_fit` record
   (`DELETE FROM sync_state WHERE key = 'backup_fit'`, as `coach_app`).
-- The gcloud commands were checked against `gcloud --help`, not run.
+- The gcloud commands were checked against `gcloud --help`, not run. The storage-class
+  paragraph follows Google's documentation on storage classes and pricing; no bucket with
+  Archive as its default class was tried.
+- The schedule (weekdays, start-up catch-up, restore-check cadence, changes of daylight saving
+  time) is tested with an injected clock; the service has not run for weeks in a container.
 - Timing and size on real data: how long a dump, the first upload of all FIT files and a
   restore check take, and how much the database volume grows during a restore check.

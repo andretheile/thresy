@@ -1,0 +1,138 @@
+# Continuous integration: lint, the whole test suite against the development Postgres, the tests
+# that need Linux or real tools (the agent's user switch, backups with pg_dump and age), and a
+# build of the application image without an agent CLI.
+#
+# Every job runs the same commands a developer runs locally (AGENTS.md, "Commands"), so a failure
+# here can be reproduced with them. No secrets: nothing here reaches Garmin, Telegram or a model
+# provider, and the tests that need the old bot's private export (COACH_LEGACY_DIR) skip.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # run it by hand on any branch (Actions tab, "Run workflow")
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.12.0" # the uv of docker/Dockerfile (UV_IMAGE)
+          enable-cache: true
+      - name: Install dependencies (uv.lock must be up to date)
+        run: uv sync --locked
+      - name: ruff check
+        run: uv run --no-sync ruff check --output-format=github
+      - name: ruff format
+        run: uv run --no-sync ruff format --check --diff
+      - name: Check the Compose files
+        env: # placeholders: compose.yml refuses to render without the database passwords
+          DB_SUPERUSER_PASSWORD: ci-placeholder
+          DB_APP_PASSWORD: ci-placeholder
+          DB_AGENT_PASSWORD: ci-placeholder
+          DB_RO_PASSWORD: ci-placeholder
+        run: |
+          docker compose -f compose.yml config --quiet
+          docker compose -f compose.dev.yml config --quiet
+
+  test:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.12.0"
+          enable-cache: true
+      # The same database a developer starts (tests/conftest.py expects it on 127.0.0.1:55432
+      # and creates its roles and databases there).
+      - name: Start the development Postgres
+        run: docker compose -f compose.dev.yml up -d --wait --wait-timeout 120
+      - name: Install dependencies
+        run: uv sync --locked
+      # Without a reachable database the database tests would skip, and the run would pass.
+      - name: Check that the tests can reach the database
+        run: |
+          uv run --no-sync python - <<'EOF'
+          import os
+
+          import psycopg
+
+          from tests.conftest import DEFAULT_ADMIN_URL
+
+          url = os.environ.get("COACH_TEST_ADMIN_URL", DEFAULT_ADMIN_URL)
+          with psycopg.connect(url, connect_timeout=10) as conn:
+              print(conn.execute("SELECT version()").fetchone()[0])
+          EOF
+      - name: pytest
+        run: uv run --no-sync pytest --durations=15
+      - name: Database log
+        if: failure()
+        run: docker compose -f compose.dev.yml logs db
+
+  isolation:
+    name: Agent isolation (setuid helper, two users)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: docker/isolation-test.sh
+        run: sh docker/isolation-test.sh
+
+  backup:
+    name: Backups (pg_dump, pg_restore, age)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the development Postgres
+        run: docker compose -f compose.dev.yml up -d --wait --wait-timeout 120
+      - name: docker/backup-test.sh
+        run: sh docker/backup-test.sh
+      - name: Database log
+        if: failure()
+        run: docker compose -f compose.dev.yml logs db
+
+  image:
+    name: Application image (AGENT_CLI=none)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No layer cache on purpose: the check is that the Dockerfile builds today, including its
+      # downloads (base images, apt repositories, the locked Python packages).
+      - name: Build docker/Dockerfile
+        run: >-
+          docker build --progress=plain -f docker/Dockerfile
+          --build-arg AGENT_CLI=none -t thresy-app:ci .
+      - name: Smoke test
+        run: |
+          docker image inspect thresy-app:ci --format 'image size: {{.Size}} bytes'
+          docker run --rm thresy-app:ci coach --help
