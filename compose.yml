@@ -229,7 +229,7 @@ services:
       - agent-home:/home/agent
     mem_limit: ${BRIDGE_MEM_LIMIT:-1536m}
 
-  # Nightly backup (docs/backup.md): database dump, the workspace's memory/ and scripts/ and new
+  # Scheduled backup (docs/backup.md): database dump, the workspace's memory/ and scripts/ and new
   # FIT files to COACH_BACKUP_URL. The only service with the backup credential. Reads FIT files
   # and the workspace, writes nothing to them.
   backup:
@@ -244,6 +244,7 @@ services:
       COACH_BACKUP_URL: ${COACH_BACKUP_URL:-file:///backups}
       COACH_BACKUP_AGE_RECIPIENT:
       COACH_BACKUP_AT:
+      COACH_BACKUP_WEEKDAYS:
       COACH_BACKUP_RESTORE_CHECK_DAYS:
       COACH_BACKUP_GCS_CREDENTIALS: /run/secrets/gcs-backup-key.json
     volumes:

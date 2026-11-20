@@ -11,7 +11,7 @@ import io
 import json
 import os
 import tarfile
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -312,6 +312,8 @@ def test_cli_status_and_run(conn, test_db, data, fake_pg, monkeypatch):
         "COACH_WORKSPACE_DIR": str(data["workspace"]),
         "COACH_BACKUP_URL": data["target"].as_uri(),
         "COACH_BACKUP_PG_BIN_DIR": str(fake_pg.bin_dir),
+        "COACH_TZ": "Europe/Berlin",
+        "COACH_BACKUP_WEEKDAYS": "Sun",
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
@@ -320,6 +322,11 @@ def test_cli_status_and_run(conn, test_db, data, fake_pg, monkeypatch):
         before = runner.invoke(get_app(), ["backup", "status"])
         assert before.exit_code == 0, before.output
         assert "last success: never" in before.output
+        assert "schedule: sun at 03:30 (Europe/Berlin); next run 20" in before.output
+        planned = json.loads(runner.invoke(get_app(), ["backup", "status", "--json"]).output)
+        next_run = datetime.fromisoformat(planned["next_run_at"])
+        assert (next_run.weekday(), f"{next_run:%H:%M}") == (6, "03:30")
+        assert next_run.utcoffset() in (timedelta(hours=1), timedelta(hours=2))
         done = runner.invoke(get_app(), ["backup", "run", "--json"])
         assert done.exit_code == 0, done.output
         assert json.loads(done.output)["fit_uploaded"] == 2
@@ -329,6 +336,9 @@ def test_cli_status_and_run(conn, test_db, data, fake_pg, monkeypatch):
         monkeypatch.setenv("COACH_BACKUP_URL", "ftp://nowhere")
         bad = runner.invoke(get_app(), ["backup", "run"])
         assert bad.exit_code == 1 and "file:// or gs://" in bad.output
+        monkeypatch.setenv("COACH_BACKUP_WEEKDAYS", "sun,funday")
+        refused = runner.invoke(get_app(), ["backup", "schedule"])
+        assert refused.exit_code == 1 and "unknown weekday 'funday'" in refused.output
     finally:
         get_settings.cache_clear()
 

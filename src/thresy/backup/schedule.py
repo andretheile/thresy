@@ -1,13 +1,15 @@
 """``coach backup schedule``: the backup service of the Compose stack.
 
-* One backup every day at ``COACH_BACKUP_AT`` (local time, ``COACH_TZ``).
-* Right after start, when the last successful backup is missing or older than
-  :data:`CATCH_UP_AFTER`, one backup after :data:`START_DELAY_S` (a new deployment gets its
-  first backup the same day; a server that was down catches up).
+* One backup at ``COACH_BACKUP_AT`` (local time, ``COACH_TZ``) on each of
+  ``COACH_BACKUP_WEEKDAYS`` (default: every day).
+* Right after start, when there is no successful backup since the last scheduled time (none
+  at all, or the service was down or failed when it was due), one backup after
+  :data:`START_DELAY_S`: a new deployment gets its first backup the same day, a server that
+  was down catches up, and a restart between two scheduled times changes nothing.
 * A failed run is retried after :data:`RETRY_AFTER_S`, at most :data:`MAX_RETRIES` times, then
   the next scheduled time is awaited.
-* When the last restore check is older than ``COACH_BACKUP_RESTORE_CHECK_DAYS``, the run
-  also restores its dump into a scratch database.
+* When the last restore check is ``COACH_BACKUP_RESTORE_CHECK_DAYS`` old (less
+  :data:`CHECK_SLACK`), the run also restores its dump into a scratch database.
 * SIGTERM or SIGINT: no new run starts; a running one stops at its next step.
 """
 
@@ -17,29 +19,62 @@ import logging
 import signal
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from thresy import db
 
 from .core import BackupConfig, BackupError, get_status, run_backup
-from .settings import BackupSettings
+from .settings import BackupSettings, describe_weekdays
 
 log = logging.getLogger(__name__)
 
 START_DELAY_S = 60.0
-CATCH_UP_AFTER = timedelta(hours=26)
 RETRY_AFTER_S = 3600.0
 MAX_RETRIES = 2
+CHECK_SLACK = timedelta(hours=12)
+"""A restore check counts as due this much early, so that backups at the same local time N days
+apart qualify although the last check finished a few minutes after its backup started (or a
+change to or from daylight saving time made the gap an hour shorter)."""
+
+
+def _scheduled(day: date, settings: BackupSettings, zone: ZoneInfo) -> datetime:
+    # A time that does not exist that day (skipped by a change to daylight saving time) is
+    # taken with the offset from before the change, so it runs an hour later on the clock.
+    return datetime.combine(day, settings.at, tzinfo=zone).astimezone(UTC)
 
 
 def next_time(now: datetime, settings: BackupSettings, zone: ZoneInfo) -> datetime:
-    """The next ``COACH_BACKUP_AT`` after ``now`` (aware datetimes)."""
-    local = now.astimezone(zone)
-    candidate = datetime.combine(local.date(), settings.at, tzinfo=zone)
-    if candidate <= local:
-        candidate = datetime.combine(local.date() + timedelta(days=1), settings.at, tzinfo=zone)
-    return candidate.astimezone(UTC)
+    """The first scheduled time after ``now`` (aware datetimes)."""
+    weekdays = settings.weekdays
+    today = now.astimezone(zone).date()
+    for offset in range(8):
+        day = today + timedelta(days=offset)
+        if day.weekday() not in weekdays:
+            continue
+        moment = _scheduled(day, settings, zone)
+        if moment > now:
+            return moment
+    raise ValueError("no weekday to schedule the backup on")  # the settings refuse that
+
+
+def previous_time(now: datetime, settings: BackupSettings, zone: ZoneInfo) -> datetime:
+    """The last scheduled time at or before ``now``."""
+    weekdays = settings.weekdays
+    today = now.astimezone(zone).date()
+    for offset in range(8):
+        day = today - timedelta(days=offset)
+        if day.weekday() not in weekdays:
+            continue
+        moment = _scheduled(day, settings, zone)
+        if moment <= now:
+            return moment
+    raise ValueError("no weekday to schedule the backup on")
+
+
+def describe(settings: BackupSettings, zone: ZoneInfo) -> str:
+    """``daily at 03:30 (Europe/Berlin)``, ``sun at 03:30 (UTC)``."""
+    return f"{describe_weekdays(settings.weekdays)} at {settings.at:%H:%M} ({zone.key})"
 
 
 def _parse(value: object) -> datetime | None:
@@ -57,12 +92,13 @@ def restore_check_due(status: dict, days: int, now: datetime) -> bool:
         return False
     check = status.get("restore_check")
     last = _parse(check.get("at")) if isinstance(check, dict) and check.get("ok") else None
-    return last is None or now - last >= timedelta(days=days)
+    return last is None or now - last >= timedelta(days=days) - CHECK_SLACK
 
 
-def catch_up_due(status: dict, now: datetime) -> bool:
+def catch_up_due(status: dict, now: datetime, settings: BackupSettings, zone: ZoneInfo) -> bool:
+    """No successful backup since the last scheduled time."""
     last = _parse(status.get("last_success_at"))
-    return last is None or now - last >= CATCH_UP_AFTER
+    return last is None or last < previous_time(now, settings, zone)
 
 
 def run_forever(
@@ -74,9 +110,13 @@ def run_forever(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     stop = stop or threading.Event()
+    log.info("backup schedule: %s", describe(settings, zone))
     with db.connect(config.database_url) as conn:
         status = get_status(conn)
-    due = now() + timedelta(seconds=START_DELAY_S) if catch_up_due(status, now()) else None
+    due = None
+    if catch_up_due(status, now(), settings, zone):
+        log.info("no successful backup since the last scheduled time; catching up")
+        due = now() + timedelta(seconds=START_DELAY_S)
     retries = 0
     while not stop.is_set():
         if due is None:
