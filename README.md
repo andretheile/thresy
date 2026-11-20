@@ -43,7 +43,8 @@ shell.
 |---|---|
 | Claude Code | Verified with real runs; used in the first deployment, on a Claude subscription |
 | Codex CLI, Cursor CLI | Adapters written from each tool's documentation; not yet run against the real CLI ([docs/runners.md](docs/runners.md)) |
-| Hosted autonomous agents with their own computer, such as xAI's Grok Bots, Meta's Muse or OpenAI's Dots | Should work, untested (see below) |
+| Hosted autonomous agents with their own persistent computer, such as xAI's Grok Bots, Meta's Muse or OpenAI's Dots | Should work, untested (see below) |
+| Sandboxes that are thrown away between sessions, such as Claude Code cloud sessions | Not on their own: they cannot hold the data (see "A machine that keeps its disk") |
 
 Thresy began as a coach running on one of those hosted agents, and the workspace is built so it
 can go back: an agent that has a shell on a machine with the `coach` commands and a restricted
@@ -52,6 +53,43 @@ own scheduling, so it would replace Thresy's bridge and Telegram transport rathe
 under them, and the isolation Thresy sets up around the agent (its own Unix user and database
 role) is then yours to arrange on that platform. Nobody has tried this yet with the current
 code. If you do, a report or a pull request is welcome.
+
+## A machine that keeps its disk
+
+Whatever runs Thresy has to be a machine whose disk survives between conversations: a small
+server, a home machine that stays on, or a hosted agent whose computer is persistent. The
+predecessor of this project ran on such a hosted agent, and that persistence is why it worked.
+Three things live on that disk and cannot sensibly be fetched fresh each time:
+
+- **The training history.** Per-second recordings add up, and Garmin's unofficial interface
+  is slow and easily upset: fetching history from Garmin (`coach sync backfill`) waits between
+  requests on purpose and can take hours. Downloading it again for every session is not an
+  option.
+- **The Garmin session.** Thresy logs in once and then keeps a session token. A machine that
+  forgets the token must log in with the password again, and repeated password logins are
+  what gets an account locked.
+- **What the coach has learned.** Its memory files, the plan, and the analysis scripts it
+  kept are what make it one coach over time instead of a new one every day.
+
+An environment that is rebuilt from the repository for each session and can only make web
+requests (a typical cloud coding sandbox) therefore cannot host Thresy by itself. It could act
+as the agent in front of a persistent Thresy elsewhere, which would need a network interface
+to the `coach` commands that does not exist yet.
+
+How much disk it takes, measured on the first deployment, a consistent amateur runner:
+
+| | |
+|---|---|
+| History | 6 years, about 780 runs and 8,700 km (between 650 and 2,400 km a year) |
+| With per-second data | 473 runs, 492 hours, 1.8 million samples |
+| Database | 246 MB, almost all of it the per-second samples |
+| Original FIT files | 156 MB |
+| Import of that history from files | 7 minutes on a small server |
+
+As a rule of thumb, 1,000 km of running with per-second data is about 40 MB of database and
+30 MB of original files, so a decade of training fits in a few gigabytes including backups.
+Memory is the tighter constraint: the four services used about 0.5 GB while idle on that
+deployment, and more while the agent works; [docs/deploy.md](docs/deploy.md) lists the limits.
 
 ## Local development
 
