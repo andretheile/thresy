@@ -46,6 +46,11 @@ uv run ruff check && uv run ruff format --check
 `coach --help` lists the available commands. Commands print text by default and JSON with
 `--json`.
 
+Two scripts run the tests that need Linux or tools a development machine may lack, each in a
+throwaway container (they need Docker; nothing is kept): `sh docker/isolation-test.sh` (the
+agent's separate Unix user, with the real setuid helper) and `sh docker/backup-test.sh` (backups
+with the real `pg_dump`, `pg_restore` and `age`, against the development Postgres).
+
 ## Deployment
 
 [docs/deploy.md](docs/deploy.md) walks through a first deployment step by step. In short:
