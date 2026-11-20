@@ -265,7 +265,7 @@ def test_timeout_stops_the_agents_group(shared, switch, monkeypatch):
     )
     clock = start_clock_when_ready(monkeypatch, ready)
     events, result = run_collect(runner.run(req(shared, timeout_s=0.5)))
-    assert clock.elapsed() < 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S  # not the sleep
+    assert clock.elapsed() < 0.5 + max_stop_s(GRACE, helper=True) + SCHEDULING_SLACK_S
     assert events[0] == Started("s-2")
     assert result.error_kind == "timeout"
     assert_all_gone(record, int(grandchild.read_text()))
@@ -360,7 +360,7 @@ def test_lingering_cli_after_result(shared, switch, monkeypatch):
     _, result = run_collect(runner.run(req(shared)))
     assert result.ok and result.text == "answer"
     # The exit wait, then the stop; not the timeout.
-    assert clock.elapsed() < 0.3 + max_stop_s(GRACE) + SCHEDULING_SLACK_S
+    assert clock.elapsed() < 0.3 + max_stop_s(GRACE, helper=True) + SCHEDULING_SLACK_S
     assert_all_gone(record)
 
 

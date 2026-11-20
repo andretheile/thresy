@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from thresy.runner import Final, RunEvent, RunRequest, RunResult
+from thresy.runner import isolation as isolation_mod
 from thresy.runner import process as process_mod
 from thresy.runner.cli_base import StreamParser
 from thresy.runner.process import ChildProcess, ProcessExit
@@ -181,11 +182,13 @@ def read_json(path: Path) -> dict[str, Any]:
 # would otherwise depend on how fast the machine starts processes.
 
 
-def max_stop_s(grace_s: float) -> float:
+def max_stop_s(grace_s: float, *, helper: bool = False) -> float:
     """The longest ChildProcess takes to stop a process group by construction: a grace period
     for SIGINT and SIGTERM each, then KILL_WAIT_S for SIGKILL, for reaping and for the stderr
-    reader."""
-    return 2 * grace_s + 3 * process_mod.KILL_WAIT_S
+    reader; with the user-switch ``helper``, plus its time limit for each of the three
+    signals."""
+    signals = 3 * isolation_mod.SIGNAL_TIMEOUT_S if helper else 0.0
+    return 2 * grace_s + 3 * process_mod.KILL_WAIT_S + signals
 
 
 SCHEDULING_SLACK_S = 10.0
