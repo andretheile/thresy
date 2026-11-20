@@ -7,8 +7,8 @@ savepoint of your transaction. All upserts are idempotent: calling them again wi
 input leaves the database unchanged.
 
 Raw Garmin payloads are stored as ``jsonb`` next to the derived columns, so the columns can be
-recomputed later. Payloads that are ``None`` or look like an error (``{"error": ...}``) are
-ignored, and a missing value never overwrites a stored one.
+recomputed later. Payloads that are ``None``, empty (``{}``) or look like an error
+(``{"error": ...}``) are ignored, and a missing value never overwrites a stored one.
 
 Wake date: Garmin keys sleep and HRV by the calendar day on which the athlete woke up.
 :func:`upsert_wellness` takes that day as ``wake_date`` and refuses payloads whose own
@@ -94,8 +94,10 @@ def to_jsonb(value: Any) -> Jsonb:
 
 
 def is_ok_payload(payload: Any) -> bool:
-    """True for a dict payload that is not an error placeholder like ``{"error": "..."}``."""
-    return isinstance(payload, Mapping) and "error" not in payload
+    """True for a non-empty dict payload that is not an error placeholder like
+    ``{"error": "..."}``. An empty dict (Garmin's answer for "no data") is not a payload, so it
+    can never overwrite a stored raw payload."""
+    return isinstance(payload, Mapping) and bool(payload) and "error" not in payload
 
 
 def _as_date(value: date | str) -> date:

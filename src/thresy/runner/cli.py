@@ -32,27 +32,37 @@ class Tier(StrEnum):
     smart = "smart"
 
 
-def _config():
-    """Runner settings from the environment, with a .env file in the current
-    directory filling gaps (like the project's other settings)."""
-    from thresy.runner.config import RunnerConfig
+def _environ() -> dict[str, str]:
+    """The environment, with a .env file in the current directory filling gaps (like the
+    project's other settings)."""
+    from dotenv import dotenv_values
 
     environ: dict[str, str] = {}
-    try:
-        from dotenv import dotenv_values
-    except ImportError:  # pragma: no cover - python-dotenv comes with pydantic-settings
-        pass
-    else:
-        if Path(".env").is_file():
-            environ.update({k: v for k, v in dotenv_values(".env").items() if v is not None})
+    if Path(".env").is_file():
+        environ.update({k: v for k, v in dotenv_values(".env").items() if v is not None})
     environ.update(os.environ)
-    return RunnerConfig.from_env(environ)
+    return environ
+
+
+def _config(environ: dict[str, str] | None = None):
+    """Runner settings from the environment (see _environ)."""
+    from thresy.runner.config import RunnerConfig
+
+    return RunnerConfig.from_env(_environ() if environ is None else environ)
 
 
 @app.command()
 def check(
     runner: RunnerOption = None,
     all_runners: Annotated[bool, typer.Option("--all", help="Check every runner.")] = False,
+    isolation: Annotated[
+        bool,
+        typer.Option(
+            "--isolation",
+            help="Instead: check that the agent runs as its own user and cannot reach the "
+            "bridge (run it in the bridge container).",
+        ),
+    ] = False,
     json_out: JsonOption = False,
 ) -> None:
     """Check that a runner's CLI is installed and logged in (spends no model usage)."""
@@ -61,10 +71,19 @@ def check(
     from thresy.runner import cmdline
 
     try:
-        config = _config()
+        environ = _environ()
+        config = _config(environ)
         names = cmdline.runner_names(runner, all_runners, config)
     except ValueError as exc:
         raise fail(str(exc), as_json=json_out, code=2) from exc
+    if isolation:
+        from thresy.runner import selftest
+
+        report = selftest.run(config, environ=environ, runner=runner)
+        emit(report.as_dict(), as_json=json_out, text=report.text())
+        if not report.ok:
+            raise typer.Exit(1)
+        return
     healths = asyncio.run(cmdline.check(names, config))
     data = [cmdline.health_dict(h) for h in healths]
     emit(

@@ -17,6 +17,13 @@ Per harness NAME (CLAUDE, CODEX, CURSOR) the following variables are read:
                                    result before it is stopped (default 10)
 
 and COACH_RUNNER selects the default runner (claude, codex, cursor or fake).
+
+For all harnesses (see thresy.runner.isolation):
+
+    COACH_AGENT_USER               start every CLI process as this Unix user, through
+                                   the setuid helper (unset or empty: off)
+    COACH_AGENT_USER_HELPER        path of that helper
+                                   (default /usr/local/libexec/thresy/run-as-agent)
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from .core import ModelTier
+from .isolation import UserSwitch, switch_from_env
 
 RUNNER_NAMES: tuple[str, ...] = ("claude", "codex", "cursor", "fake")
 DEFAULT_RUNNER = "claude"
@@ -72,6 +80,8 @@ class RunnerConfig:
     claude: HarnessConfig = field(default_factory=HarnessConfig)
     codex: HarnessConfig = field(default_factory=HarnessConfig)
     cursor: HarnessConfig = field(default_factory=HarnessConfig)
+    user_switch: UserSwitch | None = None
+    """Start the CLIs as another Unix user (COACH_AGENT_USER); None: as this process's user."""
 
     def harness(self, name: str) -> HarnessConfig:
         if name == "claude":
@@ -98,6 +108,7 @@ class RunnerConfig:
             claude=_harness_from_env(env, "CLAUDE"),
             codex=_harness_from_env(env, "CODEX"),
             cursor=_harness_from_env(env, "CURSOR"),
+            user_switch=switch_from_env(env),
         )
 
 

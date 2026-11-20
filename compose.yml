@@ -1,24 +1,39 @@
 # Production stack: Postgres, a one-shot migration, and one application image that runs as the
-# sync and bridge services.
+# sync, bridge and backup services. Step-by-step set-up: docs/deploy.md.
 #
 #   cp .env.example .env            # set the DB_*_PASSWORD values, tokens, COACH_TZ, ...
-#   docker compose up -d --build
+#   docker compose build
+#   docker compose up -d
 #
-# No ports are published. The database is on an internal network; sync and bridge also join an
-# egress network to reach Garmin, Telegram and the model provider. Every service has a memory
-# limit because the host is shared and has no swap.
+# No ports are published. The database is on an internal network; sync, bridge and backup also
+# join an egress network to reach Garmin, Telegram, the model provider and the backup bucket.
+# Every service has a memory limit because the host is shared and has no swap; the defaults
+# add up to about 2.7 GB (db 512m, sync 384m, bridge 1536m, backup 256m; migrate 256m only
+# while it runs).
 #
 # Least privilege: there is no env_file. .env is only read by Compose to fill in the values
 # below, and each service lists exactly the variables it gets. Garmin credentials and tokens
-# exist only in sync; the Telegram token and the model credential only in bridge.
-# ANTHROPIC_API_KEY is deliberately not passed anywhere: it would take precedence over the
-# subscription token (CLAUDE_CODE_OAUTH_TOKEN).
+# exist only in sync; the Telegram token only in bridge; the backup credential only in backup.
+# The model credential lives in the agent's own credential file (agent-home volume, readable by
+# the agent user only), not in any service's environment. ANTHROPIC_API_KEY is deliberately
+# not passed anywhere: it would take precedence over the subscription token.
+#
+# One-off commands run in a new container of a service, for example the legacy import
+# (docs/import.md), which needs the read/write database URL and the FIT volume of sync:
+#
+#   docker compose run --rm -v /path/to/legacy:/legacy:ro sync coach import legacy --dir /legacy
 name: thresy
 
 x-database-urls:
   app: &app-url postgresql://coach_app:${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}@db:5432/thresy
   agent: &agent-url postgresql://coach_agent:${DB_AGENT_PASSWORD:?set DB_AGENT_PASSWORD in .env}@db:5432/thresy
   ro: &ro-url postgresql://coach_ro:${DB_RO_PASSWORD:?set DB_RO_PASSWORD in .env}@db:5432/thresy
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 x-app: &app
   build:
@@ -27,10 +42,15 @@ x-app: &app
     args:
       AGENT_CLI: ${AGENT_CLI:-claude}
       AGENT_CLI_VERSION: ${AGENT_CLI_VERSION:-}
+      PG_MAJOR: "16" # keep equal to the db image below
   image: thresy-app:latest
-  init: true # reaps the agent CLI's stray child processes
+  init: true # reaps the agent CLI's stray child processes; forwards signals
   restart: unless-stopped
   networks: [backend, egress]
+  logging: *logging
+  # Non-root processes need no capabilities; the bridge adds back the two its helper uses.
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -51,14 +71,17 @@ services:
       - db-data:/var/lib/postgresql/data
       - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     networks: [backend]
+    logging: *logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d thresy"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 30
+      start_period: 30s
+    stop_grace_period: 60s # a clean shutdown avoids crash recovery on the next start
     mem_limit: ${DB_MEM_LIMIT:-512m}
 
-  # One-shot: applies migrations as coach_app, then exits; sync and bridge start after it.
+  # One-shot: applies migrations as coach_app, then exits; the other app services start after it.
   migrate:
     <<: *app
     command: ["coach", "db", "migrate"]
@@ -75,23 +98,52 @@ services:
   sync:
     <<: *app
     command: ["coach", "sync", "poll"]
+    stop_grace_period: 60s # the current step finishes before it exits (docs/sync.md)
     environment:
       COACH_DATABASE_URL: *app-url
       COACH_DATA_DIR: /data
       COACH_TZ: ${COACH_TZ:-UTC}
       COACH_GARMIN_TOKEN_DIR: /garmin
+      # Needed only until the first successful login (docs/deploy.md); then remove them.
       COACH_GARMIN_EMAIL:
       COACH_GARMIN_PASSWORD:
+      # Optional tuning (docs/sync.md); passed only when set in .env.
+      COACH_SYNC_LOOKBACK_DAYS:
+      COACH_SYNC_NEW_ACTIVITY_MAX_AGE_H:
+      COACH_SYNC_INTERVAL_S:
+      COACH_SYNC_JITTER_S:
+      COACH_SYNC_MORNING_START:
+      COACH_SYNC_MORNING_END:
+      COACH_SYNC_MORNING_INTERVAL_S:
+      COACH_SYNC_REQUEST_CHECK_S:
+      COACH_SYNC_RECHECK_DAYS:
+      COACH_SYNC_RECHECK_INTERVAL_S:
+      COACH_SYNC_STEPS_FINAL_AFTER_H:
+      COACH_SYNC_PR_REFRESH_H:
+      COACH_SYNC_FIT_MAX_ATTEMPTS:
+      COACH_SYNC_LOGIN_RETRY_H:
+      COACH_SYNC_RATE_LIMIT_BACKOFF_S:
+      COACH_SYNC_RATE_LIMIT_BACKOFF_MAX_S:
+      COACH_SYNC_FAIL_EVENT_AFTER:
+      COACH_SYNC_BACKFILL_PAUSE_S:
     volumes:
       - app-data:/data
       - garmin-auth:/garmin
-    mem_limit: ${SYNC_MEM_LIMIT:-512m}
+    mem_limit: ${SYNC_MEM_LIMIT:-384m}
 
-  # Chat loop and agent runs. The only service with the Telegram token, the model credential,
-  # the agent's database URL, the coach workspace and the agent's home directory.
+  # Chat loop and agent runs. The only service with the Telegram token, the agent's database
+  # URL, the coach workspace and the agent's home directory (which holds the agent's model
+  # credential). The bridge runs as user coach and starts the agent CLI as user agent
+  # (COACH_AGENT_USER) through a setuid helper, which needs the SETUID and SETGID
+  # capabilities; check the separation with `docker compose exec bridge coach runner check
+  # --isolation`.
   bridge:
     <<: *app
-    command: ["coach", "bridge", "run"]
+    command: ["bridge-start"] # coach workspace init, then coach bridge run
+    stop_grace_period: 30s # running agents are cancelled and the outbox flushed first
+    cap_add: [SETUID, SETGID]
+    security_opt: [] # no-new-privileges would disable the setuid helper
+    pids_limit: 512 # the agent and everything it starts
     environment:
       COACH_DATABASE_URL: *app-url
       COACH_DATABASE_URL_RO: *ro-url
@@ -101,13 +153,24 @@ services:
       COACH_TZ: ${COACH_TZ:-UTC}
       COACH_LANGUAGE: ${COACH_LANGUAGE:-en}
       COACH_NAME: ${COACH_NAME:-Thresy}
+      COACH_HOME_LOCATION:
       COACH_RUNNER: ${COACH_RUNNER:-claude}
+      COACH_AGENT_USER: ${COACH_AGENT_USER-agent}
+      # Fixed here so that nothing else (a .env file) can point it somewhere else.
+      COACH_AGENT_USER_HELPER: /usr/local/libexec/thresy/run-as-agent
       COACH_TELEGRAM_TOKEN:
       COACH_TELEGRAM_CHAT_IDS:
-      # Model credential of the configured harness (unset ones are not passed).
+      # The model credential belongs in the agent's credential file (docs/deploy.md). Setting
+      # it here also works, but then it sits in the bridge's environment as well.
       CLAUDE_CODE_OAUTH_TOKEN:
       CODEX_API_KEY:
       CURSOR_API_KEY:
+      # Variables of the bridge the agent may see beyond the runner's allow-list:
+      # DISABLE_AUTOUPDATER (the CLI version is pinned in the image) and COACH_HOME_LOCATION
+      # (for `coach weather`).
+      COACH_CLAUDE_PASS_ENV: ${COACH_CLAUDE_PASS_ENV:-DISABLE_AUTOUPDATER COACH_HOME_LOCATION}
+      COACH_CODEX_PASS_ENV: ${COACH_CODEX_PASS_ENV:-COACH_HOME_LOCATION}
+      COACH_CURSOR_PASS_ENV: ${COACH_CURSOR_PASS_ENV:-COACH_HOME_LOCATION}
       # Runner settings, passed only when set in .env (an empty value is not the same as unset).
       COACH_CLAUDE_BIN:
       COACH_CLAUDE_ARGS:
@@ -115,23 +178,78 @@ services:
       COACH_CLAUDE_MODEL_FAST:
       COACH_CLAUDE_MODEL_SMART:
       COACH_CLAUDE_ENV:
+      COACH_CLAUDE_EXIT_WAIT_S:
       COACH_CODEX_BIN:
       COACH_CODEX_ARGS:
       COACH_CODEX_PERMISSION_ARGS:
       COACH_CODEX_MODEL_FAST:
       COACH_CODEX_MODEL_SMART:
       COACH_CODEX_ENV:
+      COACH_CODEX_EXIT_WAIT_S:
       COACH_CURSOR_BIN:
       COACH_CURSOR_ARGS:
       COACH_CURSOR_PERMISSION_ARGS:
       COACH_CURSOR_MODEL_FAST:
       COACH_CURSOR_MODEL_SMART:
       COACH_CURSOR_ENV:
+      COACH_CURSOR_EXIT_WAIT_S:
+      # Bridge tuning (docs/bridge.md), passed only when set in .env.
+      COACH_BRIDGE_TRANSPORT:
+      COACH_BRIDGE_QUIET_HOURS:
+      COACH_BRIDGE_BRIEFING:
+      COACH_BRIDGE_BRIEFING_FALLBACK:
+      COACH_BRIDGE_BRIEFING_LATEST:
+      COACH_BRIDGE_NIGHT_END_EARLIEST:
+      COACH_BRIDGE_BRIEFING_SETTLE_S:
+      COACH_BRIDGE_DEBRIEF:
+      COACH_BRIDGE_DEBRIEF_DELAY_S:
+      COACH_BRIDGE_DEBRIEF_MAX_WAIT_S:
+      COACH_BRIDGE_DEBRIEF_MAX_AGE_H:
+      COACH_BRIDGE_NOTIFY_INTERVAL_H:
+      COACH_BRIDGE_SYNC_FAILED_THRESHOLD:
+      COACH_BRIDGE_SYNC_FAILED_WINDOW_H:
+      COACH_BRIDGE_RUN_TIMEOUT_S:
+      COACH_BRIDGE_CHAT_TIER:
+      COACH_BRIDGE_PROACTIVE_TIER:
+      COACH_BRIDGE_CONTEXT_MESSAGES:
+      COACH_BRIDGE_CONTEXT_CHARS:
+      COACH_BRIDGE_CONTEXT_HOURS:
+      COACH_BRIDGE_REQUEUE_MINUTES:
+      COACH_BRIDGE_OUTBOX_POLL_S:
+      COACH_BRIDGE_EVENTS_POLL_S:
+      COACH_BRIDGE_SEND_ATTEMPTS:
+      COACH_BRIDGE_SYNC_REQUEST_TIMEOUT_S:
+      COACH_BRIDGE_SHUTDOWN_GRACE_S:
     volumes:
-      - app-data:/data
+      - app-data:/data:ro # the agent must not alter source data
       - workspace:/workspace
-      - agent-home:/home/coach
+      - agent-home:/home/agent
     mem_limit: ${BRIDGE_MEM_LIMIT:-1536m}
+
+  # Nightly backup (docs/backup.md): database dump, the workspace's memory/ and new FIT files to
+  # COACH_BACKUP_URL. The only service with the backup credential. Reads FIT files and the
+  # workspace, writes nothing to them.
+  backup:
+    <<: *app
+    command: ["coach", "backup", "schedule"]
+    stop_grace_period: 60s
+    environment:
+      COACH_DATABASE_URL: *app-url
+      COACH_DATA_DIR: /data
+      COACH_WORKSPACE_DIR: /workspace
+      COACH_TZ: ${COACH_TZ:-UTC}
+      COACH_BACKUP_URL: ${COACH_BACKUP_URL:-file:///backups}
+      COACH_BACKUP_AGE_RECIPIENT:
+      COACH_BACKUP_AT:
+      COACH_BACKUP_RESTORE_CHECK_DAYS:
+      COACH_BACKUP_GCS_CREDENTIALS: /run/secrets/gcs-backup-key.json
+    volumes:
+      - app-data:/data:ro
+      - workspace:/workspace:ro
+      - backups:/backups # the default file:///backups target; unused with a bucket
+      # The bucket's create-only service-account key; /dev/null (no key) when unset.
+      - ${COACH_BACKUP_GCS_KEY_FILE:-/dev/null}:/run/secrets/gcs-backup-key.json:ro
+    mem_limit: ${BACKUP_MEM_LIMIT:-256m}
 
 networks:
   backend:
@@ -144,3 +262,4 @@ volumes:
   garmin-auth:
   workspace:
   agent-home:
+  backups:

@@ -42,6 +42,8 @@ PLUGINS: dict[str, str | None] = {
     "bridge": "bridge",
     "tools": None,
     "runner": "runner",
+    "workspace": "workspace",
+    "backup": "backup",
 }
 
 JsonOption = Annotated[bool, typer.Option("--json", help="Print JSON instead of text.")]

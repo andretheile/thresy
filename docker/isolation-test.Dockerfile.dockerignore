@@ -1,0 +1,13 @@
+# Build context for docker/isolation-test.Dockerfile: only the runner package, its tests and
+# the user-switch files.
+*
+!src/thresy/__init__.py
+!src/thresy/runner/
+!src/thresy/workspace/
+!tests/__init__.py
+!tests/runner/
+!docker/run-as-agent.c
+!docker/build-run-as-agent.sh
+!docker/setup-users.sh
+**/__pycache__
+**/*.pyc
