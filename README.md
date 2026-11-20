@@ -7,10 +7,12 @@ working with that data through plain command-line tools.
 
 The name comes from "threshold", as in threshold runs.
 
-Status: early development, not yet run in production. In place: the core (configuration,
-database schema, migrations, FIT parsing, write API), the runner layer over the coding-agent
-CLIs, Garmin sync, the importer for the bot Thresy replaces, analysis commands, the Telegram
-bridge, backups, and the Compose stack.
+Status: early. Thresy has run in one deployment since November 2026, with Claude Code as the
+agent. Expect rough edges, and read "Which agents it works with" and "Credits and disclaimers"
+below before relying on it.
+
+Thresy is not a Garmin product and is not affiliated with Garmin. It reads your own data
+through an unofficial community library, which can stop working at any time.
 
 ## How it fits together
 
@@ -22,13 +24,34 @@ bridge, backups, and the Compose stack.
 - The agent is treated as the least trusted part: it works with its own database role
   (read everything, write only plans, races, segments and outgoing messages), runs as its own
   Unix user, and never sees the Garmin, Telegram or database credentials of the services.
-- **Backup** dumps the database and uploads it, the FIT files and the coach's memory files and kept scripts to a
-  bucket with a create-only credential, optionally encrypted with age.
+- **Backup** dumps the database and uploads it, the FIT files and the coach's memory files and
+  kept scripts to a bucket with a create-only credential, optionally encrypted with age.
 - Everything runs as one Docker Compose stack with no published ports.
 
 The design, database contract and rules for contributors are in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); [AGENTS.md](AGENTS.md) is the short guide for
 coding agents working on this repository.
+
+## Which agents it works with
+
+Nothing outside one small package (`thresy.runner`) knows which agent is in use. What the coach
+is and knows lives in plain things any agent can work with: a brief in `AGENTS.md`, playbooks
+and memory files in a workspace directory, the data in Postgres, and `coach …` commands on the
+shell.
+
+| Agent | State |
+|---|---|
+| Claude Code | Verified with real runs; used in the first deployment, on a Claude subscription |
+| Codex CLI, Cursor CLI | Adapters written from each tool's documentation; not yet run against the real CLI ([docs/runners.md](docs/runners.md)) |
+| Hosted autonomous agents with their own computer, such as xAI's Grok Bots, Meta's Muse or OpenAI's Dots | Should work, untested (see below) |
+
+Thresy began as a coach running on one of those hosted agents, and the workspace is built so it
+can go back: an agent that has a shell on a machine with the `coach` commands and a restricted
+database URL can read the brief and coach from it. Such a system brings its own chat and its
+own scheduling, so it would replace Thresy's bridge and Telegram transport rather than run
+under them, and the isolation Thresy sets up around the agent (its own Unix user and database
+role) is then yours to arrange on that platform. Nobody has tried this yet with the current
+code. If you do, a report or a pull request is welcome.
 
 ## Local development
 
@@ -66,6 +89,27 @@ The coding-agent CLI in the image is chosen with the `AGENT_CLI` build argument 
 `codex`, `cursor` or `none`) and pinned with `AGENT_CLI_VERSION`; upgrade it by changing the
 version and rebuilding. With Claude Code, use a subscription token (`claude setup-token`) and
 leave `ANTHROPIC_API_KEY` unset. Backups: [docs/backup.md](docs/backup.md).
+
+## Credits and disclaimers
+
+- **Garmin.** Thresy is an independent project. It is not affiliated with, endorsed by or
+  supported by Garmin. Garmin's official developer programme is meant for approved business
+  integrations, not for an individual reading their own data, so Thresy uses the community
+  library [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) by Ron
+  Klinkien and its contributors (MIT), which talks to the same web services as Garmin's own
+  apps. Thanks to them: without that library this project would not exist. Because the interface is unofficial, it can change or stop
+  working without notice. Use Thresy only with your own account, at your own risk, and check
+  that this use is compatible with Garmin's terms for you. Garmin and Garmin Connect are
+  trademarks of Garmin Ltd. or its subsidiaries.
+- **Weather** comes from [Open-Meteo](https://open-meteo.com/), whose data is licensed under
+  CC BY 4.0 and whose free service is for non-commercial use.
+- **Libraries** this project leans on most: [fitparse](https://github.com/dtcooper/python-fitparse)
+  for FIT files, [python-telegram-bot](https://python-telegram-bot.org/) for the chat,
+  [psycopg](https://www.psycopg.org/) for Postgres.
+- **Other names.** Telegram, Claude, Codex, Cursor, Grok, Muse and Dots are products of their
+  respective owners, with which this project has no affiliation.
+- **Not medical advice.** The coach is software that reads training data. It is not a doctor
+  or a physiotherapist, and what it says is no substitute for one.
 
 ## License
 
