@@ -342,3 +342,16 @@ def test_self_test_reports_a_missing_workspace(tmp_path):
         RunnerConfig(), environ={"COACH_WORKSPACE_DIR": str(tmp_path / "missing")}
     )
     assert not report.ok and report.checks[0].name == "workspace"
+
+
+def test_self_test_finds_a_smuggled_secret(tmp_path, monkeypatch):
+    from thresy.runner import HarnessConfig, selftest
+
+    for name in ("inbox", "out"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("COACH_TELEGRAM_TOKEN", "synthetic-telegram-token")
+    config = RunnerConfig(claude=HarnessConfig(env={"SMUGGLED": "synthetic-telegram-token"}))
+    environ = {**os.environ, "COACH_WORKSPACE_DIR": str(tmp_path)}
+    report = selftest.run(config, environ=environ)
+    check = next(c for c in report.checks if c.name.startswith("secrets of the bridge"))
+    assert check.status == "FAIL" and "COACH_TELEGRAM_TOKEN" in check.detail

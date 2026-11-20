@@ -26,6 +26,7 @@ RUN printf '%s\n' '# test credential' 'export THRESY_TEST_CREDENTIAL="from the a
  && chmod 0600 /home/agent/.thresy/credentials.env
 COPY src/thresy/__init__.py /app/src/thresy/__init__.py
 COPY src/thresy/runner /app/src/thresy/runner
+COPY src/thresy/workspace /app/src/thresy/workspace
 COPY tests/__init__.py /app/tests/__init__.py
 COPY tests/runner /app/tests/runner
 RUN echo /app/src > "$(python -c 'import site; print(site.getsitepackages()[0])')/thresy-src.pth"

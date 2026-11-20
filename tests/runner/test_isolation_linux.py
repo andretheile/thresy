@@ -367,6 +367,52 @@ def test_child_process_direct_stop(shared, switch):
     assert child.pid is not None and not group_alive(child.pid)
 
 
+# -- the shared workspace -----------------------------------------------------------------------
+
+
+def test_workspace_is_shared_between_bridge_and_agent(shared, switch):
+    """`coach workspace init` runs as the bridge's user; the agent edits what it created, and a
+    later template update replaces a file the agent rewrote."""
+    from thresy.workspace import init_workspace
+
+    template = shared / "template"
+    for rel, text in {
+        "AGENTS.md": "v1\n",
+        "CLAUDE.md": "@AGENTS.md\n",
+        "playbooks/chat.md": "chat\n",
+        "memory/profile.md": "skeleton\n",
+    }.items():
+        (template / rel).parent.mkdir(parents=True, exist_ok=True)
+        (template / rel).write_text(text)
+    workspace = shared / "workspace"
+    workspace.mkdir()
+    workspace.chmod(0o2770)
+    init_workspace(workspace, template)
+
+    code = (
+        "import os\n"
+        "open('memory/profile.md', 'a').write('learned something\\n')\n"
+        "open('AGENTS.md.new', 'w').write('rewritten by the agent\\n')\n"
+        "os.replace('AGENTS.md.new', 'AGENTS.md')\n"
+        "open('out/plot.png', 'wb').write(b'png')\n"
+        "os.makedirs('notes/2030', exist_ok=True)\n"
+        "open('notes/2030/a.md', 'w').write('note\\n')\n"
+    )
+    rc, output = run_as_agent(switch, workspace, code)
+    assert rc == 0, output
+    assert (workspace / "out" / "plot.png").read_bytes() == b"png"  # the bridge reads out/
+    assert (workspace / "AGENTS.md").stat().st_uid == switch.uid
+    (template / "AGENTS.md").write_text("v2\n")
+    result = init_workspace(workspace, template)
+    assert result.updated == ["AGENTS.md"]
+    assert (workspace / "AGENTS.md").read_text() == "v2\n"
+    assert (workspace / "memory" / "profile.md").read_text() == "skeleton\nlearned something\n"
+    rc, output = run_as_agent(
+        switch, workspace, "open('AGENTS.md', 'a').write('the agent may still edit it\\n')"
+    )
+    assert rc == 0, output
+
+
 # -- the self-test ------------------------------------------------------------------------------
 
 

@@ -3,6 +3,7 @@
 *
 !src/thresy/__init__.py
 !src/thresy/runner/
+!src/thresy/workspace/
 !tests/__init__.py
 !tests/runner/
 !docker/run-as-agent.c
