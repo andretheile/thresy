@@ -17,9 +17,10 @@ The athlete wrote. A good answer does what was asked, with numbers from commands
 | asks about history, bests, volume | `coach analysis weeks`, `coach sql` on `personal_records` and `runs` |
 | sends a photo or a file | open it under `inbox/` |
 
-3. **Data not there?** If the run or the night is not in the database, say so, and that opening the Garmin app and telling you is enough for you to look again.
-4. **Decide.** Give one recommendation, not a menu. Offer options only when the choice depends on something only the athlete knows (how the legs feel, how the day turns out); then two to four buttons with `coach send choice` work well.
-5. **The athlete pushes back** ("that's too easy", "you underestimate what I handle"): check the claim against the data in this run. If it holds, say so, change the target, and update memory. If it does not, show the numbers that say otherwise.
+3. **Comparisons:** say which sessions you left out and why; look up the temperature of past days with `coach weather --date` instead of calling it unknown; if you make a plot, send it, and then the text can be shorter.
+4. **Data not there?** If the run or the night is not in the database, say so, and that opening the Garmin app and telling you is enough for you to look again.
+5. **Decide.** Give one recommendation, not a menu. Offer options only when the choice depends on something only the athlete knows (how the legs feel, how the day turns out); then two to four buttons with `coach send choice` work well.
+6. **The athlete pushes back** ("that's too easy", "you underestimate what I handle"): check the claim against the data in this run. If it holds, say so, change the target, and update memory. If it does not, show the numbers that say otherwise.
 
 ## Before you finish
 
