@@ -12,6 +12,9 @@ Environment:
   passwords of ``coach_app`` / ``coach_agent`` / ``coach_ro`` on that server (default: the
   compose.dev.yml values). Missing roles are created with these passwords.
 * ``COACH_LEGACY_DIR``: the old bot's export, for the ``legacy`` parity tests.
+
+Every test runs with plain CLI output (:func:`plain_cli_output`), whatever the environment says
+about colours and terminals.
 """
 
 from __future__ import annotations
@@ -27,8 +30,10 @@ import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from typer import rich_utils
 
 from thresy import db, migrate
+from thresy.cli import TERMINAL_FORCING_VARIABLES
 
 DEFAULT_ADMIN_URL = "postgresql://postgres:postgres@127.0.0.1:55432/postgres"
 START_HINT = "start it with: docker compose -f compose.dev.yml up -d"
@@ -174,6 +179,31 @@ def fresh_db(pg_server: PgServer) -> Iterator[TestDatabase]:
         yield database
     finally:
         pg_server.drop_database(database.name)
+
+
+CLI_OUTPUT_VARIABLES = (
+    *TERMINAL_FORCING_VARIABLES,
+    "TTY_INTERACTIVE",
+    "NO_COLOR",
+    "TERMINAL_WIDTH",
+    "COLUMNS",
+    "LINES",
+)
+"""What typer and rich read from the environment to decide on escape codes and the width."""
+
+
+@pytest.fixture(autouse=True)
+def plain_cli_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI output in every test as a script or the agent gets it, wherever the tests run: no
+    escape codes, 80 columns. On GitHub Actions, GITHUB_ACTIONS made typer render help with
+    styling, which split the words tests look for. typer reads its variables once, when
+    ``typer.rich_utils`` is imported, so its settings are pinned as well; subprocesses inherit
+    the cleaned environment."""
+    for name in CLI_OUTPUT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("COLUMNS", "80")
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", False)
+    monkeypatch.setattr(rich_utils, "MAX_WIDTH", None)
 
 
 @pytest.fixture(scope="session")

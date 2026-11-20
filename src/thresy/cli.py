@@ -25,6 +25,8 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
+import os
+import sys
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -196,6 +198,33 @@ def get_app() -> typer.Typer:
     return app
 
 
+TERMINAL_FORCING_VARIABLES = ("GITHUB_ACTIONS", "FORCE_COLOR", "PY_COLORS", "TTY_COMPATIBLE")
+"""typer renders help and usage errors with rich and makes it treat the output as a terminal,
+escape codes included, when GITHUB_ACTIONS, FORCE_COLOR (any value, "0" too) or PY_COLORS is set;
+rich does so by itself for TTY_COMPATIBLE=1 (typer/rich_utils.py, rich/console.py)."""
+
+
+def plain_unless_terminal(stream: Any = None) -> None:
+    """Keep help and usage errors free of escape codes unless stdout is a terminal.
+
+    The coaching agent learns the commands from ``coach … --help`` in a non-interactive shell;
+    styling there is noise it pays for on every read, and so it is for a pipe or a file. Only
+    when one of :data:`TERMINAL_FORCING_VARIABLES` is set does anything need to change (rich
+    detects a terminal correctly otherwise), so the usual call does not import rich."""
+    if not any(os.environ.get(name) for name in TERMINAL_FORCING_VARIABLES):
+        return
+    stream = sys.stdout if stream is None else stream
+    try:
+        terminal = stream.isatty()
+    except (AttributeError, ValueError):
+        terminal = False
+    if not terminal:
+        from typer import rich_utils
+
+        rich_utils.FORCE_TERMINAL = False
+
+
 def main() -> None:
     """Console-script entry point (``coach``)."""
+    plain_unless_terminal()
     get_app()()
