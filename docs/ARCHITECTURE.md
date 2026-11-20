@@ -295,6 +295,7 @@ The sync poller inserts; the bridge consumes and sets `processed_at`. `dedupe_ke
 | `new_activity` | `activity:<id>` | `{activity_id, type, is_run}` |
 | `garmin_auth_required` | `garmin_auth:<date>` | `{reason}` |
 | `sync_failed` | `sync_failed:<date>:<hour>` | `{error}` |
+| `backup_failed` | `backup_failed:<date>` | `{error, last_success_at}` |
 
 ### Agent requests
 
@@ -376,13 +377,15 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## CLI contract
 
-`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach plan …` · `coach races …` · `coach backup run|restore-check` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
+`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
 
 ## Configuration
 
 `COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_DATA_DIR` (FIT files, plots), `COACH_WORKSPACE_DIR`, `COACH_TZ` (default `UTC`), `COACH_LANGUAGE` (default `en`), `COACH_NAME` (default `Thresy`, the name the coach uses for itself), `COACH_RUNNER` (default `claude`), `COACH_TELEGRAM_TOKEN`, `COACH_TELEGRAM_CHAT_IDS`. `COACH_AGENT_DATABASE_URL` is the `coach_agent` URL the bridge hands to the agent as its `COACH_DATABASE_URL`. `COACH_LEGACY_DIR` points tests and the importer at the old export.
 
 Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`, `COACH_<NAME>_PASS_ENV` (parent variables the agent may inherit), `COACH_<NAME>_EXIT_WAIT_S`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
+
+Further settings, each documented with its package: `COACH_HOME_LOCATION` (default place for `coach weather`), `COACH_SYNC_*` (docs/sync.md), `COACH_BRIDGE_*` (docs/bridge.md), `COACH_BACKUP_*` (docs/backup.md), `COACH_AGENT_USER` and `COACH_AGENT_USER_HELPER` (the user switch, docs/runners.md).
 
 Garmin (sync only): `COACH_GARMIN_EMAIL`, `COACH_GARMIN_PASSWORD`, `COACH_GARMIN_TOKEN_DIR`. Model credential (bridge only), by harness: `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `CURSOR_API_KEY`. In `Settings` an empty value counts as unset.
 
@@ -400,7 +403,9 @@ Each service gets only the environment and volumes it needs; there is no blanket
 
 Volumes: `db-data`; `app-data` (`COACH_DATA_DIR`, original FIT files: read/write in `sync`, read-only in `bridge`, so the agent cannot alter source data); `garmin-auth` (`sync` only); `workspace` and `agent-home` (`bridge` only). Files the agent produces, such as plots, go under `out/` in the workspace, and `coach send` accepts paths only from there. `bridge` holds all three database URLs and hands the agent only the `coach_agent` and `coach_ro` ones. `ANTHROPIC_API_KEY` must stay unset where subscription auth is used, because it takes precedence over the subscription token. The agent CLI version is pinned in the image and upgraded deliberately.
 
-Backups (planned): nightly Postgres dump, original FIT files and the coach's memory files to an object-storage bucket, written by a credential that can create objects but not read or delete them.
+A fifth service, `backup`, runs `coach backup schedule` with read-only mounts of the data and workspace volumes and its own `backups` volume (see "Backups").
+
+The model credential is not in any service's environment: it sits in a file in the agent's home volume that only the agent user can read, and the user-switch helper loads it after switching. The `bridge` container keeps only the SETUID and SETGID capabilities, which that helper needs; every other service drops all capabilities and sets no-new-privileges. Services run from a working directory the agent cannot write, because settings may be read from a `.env` file there.
 
 ### The agent runs as its own Unix user
 
@@ -417,7 +422,7 @@ An environment allow-list alone does not isolate the agent: a process can read t
 
 - `AGENTS.md` (with `CLAUDE.md` containing only `@AGENTS.md`): who the coach is, how to behave, which commands exist, where memory lives. It names no athlete.
 - `playbooks/chat.md`, `playbooks/morning-briefing.md`, `playbooks/post-run.md`, plus further playbooks the coach reads on demand (week planning, race preparation). The bridge names the first three in its prompts.
-- `memory/`: Markdown files the coach reads at the start of a session and edits as it learns (athlete profile, physiology and paces, preferences and standing rules, current goals). The template holds empty skeletons with instructions; a deployment's real files are seeded from `private/` and live only in the workspace volume and its backups.
+- `memory/`: Markdown files the coach reads at the start of a session and edits as it learns: `athlete.md`, `places.md`, `fitness.md`, `preferences.md`, `goals.md`, `journal.md`, together about 10 KB at most so they can be read in full every session. The template holds empty skeletons with instructions; a deployment's real files are seeded from `private/` and live only in the workspace volume and its backups.
 - `out/` for files the agent produces, `inbox/` for files the athlete sent.
 
 Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat message and it sends nothing in between unless it carries content; the exact reply `NO_REPLY` sends nothing; "last night" means `wake_date` equal to today; numbers come from `coach` commands or SQL, never from memory of earlier conversations; anything it should remember goes into `memory/` or the plan tables, because sessions end daily.
