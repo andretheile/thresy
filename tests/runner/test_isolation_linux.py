@@ -15,7 +15,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -28,11 +27,15 @@ from thresy.runner.isolation import UserSwitch, switch_from_env
 from thresy.runner.process import ChildProcess, run_capture
 
 from .runner_testkit import (
+    SCHEDULING_SLACK_S,
     group_alive,
+    max_stop_s,
     pid_alive,
     read_json,
+    record_signals,
     run_collect,
     spec_env,
+    start_clock_when_ready,
     wait_until,
     write_fake_cli,
 )
@@ -247,33 +250,48 @@ def test_helper_is_setuid_root_for_the_bridge_group_only():
 # -- stopping the agent's process group ---------------------------------------------------------
 
 
-def test_timeout_stops_the_agents_group(shared, switch):
+def test_timeout_stops_the_agents_group(shared, switch, monkeypatch):
     grandchild = shared / "grandchild.pid"
+    ready = shared / "ready"
     runner, record = make(
-        shared, switch, steps=[{"spawn": str(grandchild)}, out(session="s-2"), {"sleep": 600}]
+        shared,
+        switch,
+        steps=[
+            {"spawn": str(grandchild)},
+            out(session="s-2"),
+            {"ready": str(ready)},
+            {"sleep": 600},
+        ],
     )
-    start = time.monotonic()
-    events, result = run_collect(runner.run(req(shared, timeout_s=1.0)))
-    assert time.monotonic() - start < 8
+    clock = start_clock_when_ready(monkeypatch, ready)
+    events, result = run_collect(runner.run(req(shared, timeout_s=0.5)))
+    assert clock.elapsed() < 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S  # not the sleep
     assert events[0] == Started("s-2")
     assert result.error_kind == "timeout"
     assert_all_gone(record, int(grandchild.read_text()))
 
 
-def test_escalates_to_sigkill_across_users(shared, switch):
+def test_escalates_to_sigkill_across_users(shared, switch, monkeypatch):
     grandchild = shared / "grandchild.pid"
+    ready = shared / "ready"
     runner, record = make(
         shared,
         switch,
         ignore_sigint=True,
         ignore_sigterm=True,
-        steps=[{"spawn": str(grandchild)}, out(session="s-3"), {"sleep": 600}],
+        steps=[
+            {"spawn": str(grandchild)},
+            out(session="s-3"),
+            {"ready": str(ready)},
+            {"sleep": 600},
+        ],
     )
-    start = time.monotonic()
+    sent = record_signals(monkeypatch)
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(shared, timeout_s=0.5)))
-    elapsed = time.monotonic() - start
     assert result.error_kind == "timeout"
-    assert elapsed >= 0.5 + 2 * GRACE
+    assert sent == ["SIGINT", "SIGTERM", "SIGKILL"]
+    assert clock.elapsed() >= 2 * GRACE  # SIGINT and SIGTERM each had their grace period
     assert_all_gone(record, int(grandchild.read_text()))
 
 
@@ -330,19 +348,26 @@ def test_leftover_processes_after_exit_are_stopped(shared, switch):
     assert_all_gone(record, int(grandchild.read_text()))
 
 
-def test_lingering_cli_after_result(shared, switch):
-    runner, record = make(shared, switch, steps=[out(result="answer"), {"sleep": 600}])
+def test_lingering_cli_after_result(shared, switch, monkeypatch):
+    ready = shared / "ready"
+    runner, record = make(
+        shared, switch, steps=[out(result="answer"), {"ready": str(ready)}, {"sleep": 600}]
+    )
     runner.config = HarnessConfig(
         binary=runner.config.binary, env=runner.config.env, exit_wait_s=0.3
     )
-    start = time.monotonic()
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(shared)))
     assert result.ok and result.text == "answer"
-    assert time.monotonic() - start < 5
+    # The exit wait, then the stop; not the timeout.
+    assert clock.elapsed() < 0.3 + max_stop_s(GRACE) + SCHEDULING_SLACK_S
     assert_all_gone(record)
 
 
 def test_child_process_direct_stop(shared, switch):
+    # The script ignores SIGINT, so it waits out one grace period; SIGTERM ends it, which
+    # takes the kernel and the reaper well under the second one (1 s, so a busy machine does
+    # not let the stop reach SIGKILL).
     script = shared / "linger.py"
     script.write_text(
         "import signal, time\n"
@@ -354,7 +379,7 @@ def test_child_process_direct_stop(shared, switch):
 
     async def scenario():
         child = ChildProcess(
-            [sys.executable, str(script)], cwd=shared, env={}, grace_s=0.3, switch=switch
+            [sys.executable, str(script)], cwd=shared, env={}, grace_s=1.0, switch=switch
         )
         async with child:
             async for line in child.lines(timeout_s=10):

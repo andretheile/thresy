@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -19,14 +18,17 @@ from thresy.runner import EFFORTS, HarnessConfig, Progress, Started
 from thresy.runner.claude import ClaudeRunner, ClaudeStreamParser
 
 from .runner_testkit import (
+    SCHEDULING_SLACK_S,
     exit_info,
     fixture_lines,
     group_alive,
+    max_stop_s,
     parse,
     read_json,
     request,
     run_collect,
     spec_env,
+    start_clock_when_ready,
     wait_until,
     write_fake_cli,
 )
@@ -302,16 +304,21 @@ def test_end_to_end_with_fake_binary(tmp_path, monkeypatch):
     assert "Antworte" not in " ".join(seen["argv"])
 
 
-def test_lingering_cli_does_not_hold_back_the_answer(tmp_path):
+def test_lingering_cli_does_not_hold_back_the_answer(tmp_path, monkeypatch):
     record = tmp_path / "record.json"
+    ready = tmp_path / "ready"
     fixture = Path(__file__).parent / "fixtures/claude/claude_new_session.jsonl"
-    env = spec_env(record=str(record), steps=[{"out_file": str(fixture)}, {"sleep": 600}])
+    env = spec_env(
+        record=str(record),
+        steps=[{"out_file": str(fixture)}, {"ready": str(ready)}, {"sleep": 600}],
+    )
     config = HarnessConfig(binary=str(write_fake_cli(tmp_path)), env=env, exit_wait_s=0.5)
-    start = time.monotonic()
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(
         ClaudeRunner(config, kill_grace_s=0.3).run(request(tmp_path, timeout_s=120))
     )
-    assert time.monotonic() - start < 10
+    # The exit wait, then the stop; not the timeout.
+    assert clock.elapsed() < 0.5 + max_stop_s(0.3) + SCHEDULING_SLACK_S
     assert result.ok and result.text == "OK"
     pgid = read_json(record)["pgid"]
     assert wait_until(lambda: not group_alive(pgid))

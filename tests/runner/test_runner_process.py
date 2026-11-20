@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +22,16 @@ from thresy.runner.environment import allowed_environment
 from thresy.runner.process import ChildProcess, ProcessExit
 
 from .runner_testkit import (
+    SCHEDULING_SLACK_S,
     collect,
     group_alive,
+    max_stop_s,
     pid_alive,
     read_json,
+    record_signals,
     run_collect,
     spec_env,
+    start_clock_when_ready,
     wait_until,
     write_fake_cli,
 )
@@ -152,32 +155,48 @@ def test_nonzero_exit_without_result(tmp_path):
     assert result.session_id == "s-3"
 
 
-def test_timeout_stops_process_group(tmp_path):
+def test_timeout_stops_process_group(tmp_path, monkeypatch):
     grandchild = tmp_path / "grandchild.pid"
+    ready = tmp_path / "ready"
     runner, record = make(
-        tmp_path, steps=[{"spawn": str(grandchild)}, out(session="s-4"), {"sleep": 600}]
+        tmp_path,
+        steps=[
+            {"spawn": str(grandchild)},
+            out(session="s-4"),
+            {"ready": str(ready)},
+            {"sleep": 600},
+        ],
     )
-    start = time.monotonic()
-    events, result = run_collect(runner.run(req(tmp_path, timeout_s=1.0)))
-    assert time.monotonic() - start < 8
+    clock = start_clock_when_ready(monkeypatch, ready)
+    events, result = run_collect(runner.run(req(tmp_path, timeout_s=0.5)))
+    assert clock.elapsed() < 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S  # not the sleep
     assert events[0] == Started("s-4")
     assert result.error_kind == "timeout" and not result.ok
     assert_group_gone(record, int(grandchild.read_text()))
 
 
-def test_escalates_to_sigkill(tmp_path):
+def test_escalates_to_sigkill(tmp_path, monkeypatch):
+    # The CLI and its grandchild ignore SIGINT and SIGTERM from the start (the timeout only
+    # starts once both exist), so only SIGKILL can stop them.
     grandchild = tmp_path / "grandchild.pid"
+    ready = tmp_path / "ready"
     runner, record = make(
         tmp_path,
         ignore_sigint=True,
         ignore_sigterm=True,
-        steps=[{"spawn": str(grandchild)}, out(session="s-5"), {"sleep": 600}],
+        steps=[
+            {"spawn": str(grandchild)},
+            out(session="s-5"),
+            {"ready": str(ready)},
+            {"sleep": 600},
+        ],
     )
-    start = time.monotonic()
+    sent = record_signals(monkeypatch)
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(tmp_path, timeout_s=0.5)))
-    elapsed = time.monotonic() - start
     assert result.error_kind == "timeout"
-    assert elapsed >= 0.5 + 2 * GRACE  # waited out SIGINT and SIGTERM
+    assert sent == ["SIGINT", "SIGTERM", "SIGKILL"]
+    assert clock.elapsed() >= 2 * GRACE  # SIGINT and SIGTERM each had their grace period
     assert_group_gone(record, int(grandchild.read_text()))
 
 
@@ -295,25 +314,31 @@ def test_leftover_processes_after_exit_are_stopped(tmp_path):
     assert_group_gone(record, int(grandchild.read_text()))
 
 
-def test_result_then_stdout_held_open(tmp_path):
+def test_result_then_stdout_held_open(tmp_path, monkeypatch):
     # A background process keeps stdout open after the CLI exits: the run ends
     # shortly after the result (not at the timeout), keeps the answer, and the
     # group is stopped.
     grandchild = tmp_path / "grandchild.pid"
+    ready = tmp_path / "ready"
     runner, record = make(
         tmp_path,
         config={"exit_wait_s": 0.5},
-        steps=[{"spawn": str(grandchild), "hold_stdout": True}, out(result="answer")],
+        steps=[
+            {"spawn": str(grandchild), "hold_stdout": True},
+            out(result="answer"),
+            {"ready": str(ready)},
+        ],
     )
-    start = time.monotonic()
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(tmp_path, timeout_s=120)))
-    assert time.monotonic() - start < 10
+    assert clock.elapsed() < 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S  # not the timeout
     assert result.ok and result.text == "answer"
     assert_group_gone(record, int(grandchild.read_text()))
 
 
-def test_result_then_hang_returns_the_answer_quickly(tmp_path):
+def test_result_then_hang_returns_the_answer_quickly(tmp_path, monkeypatch):
     grandchild = tmp_path / "grandchild.pid"
+    ready = tmp_path / "ready"
     runner, record = make(
         tmp_path,
         config={"exit_wait_s": 0.5},
@@ -322,35 +347,43 @@ def test_result_then_hang_returns_the_answer_quickly(tmp_path):
             out(session="s-11"),
             out(text="Easy run today."),
             out(result="Easy run today."),
+            {"ready": str(ready)},
             {"sleep": 600},
         ],
     )
-    start = time.monotonic()
+    clock = start_clock_when_ready(monkeypatch, ready)
     events, result = run_collect(runner.run(req(tmp_path, timeout_s=120)))
-    elapsed = time.monotonic() - start
-    assert elapsed < 0.5 + 2 * GRACE + 5  # exit wait + SIGINT/SIGTERM grace + slack
+    # The exit wait, then the stop; not the timeout.
+    assert clock.elapsed() < 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S
     assert result.ok and result.text == "Easy run today." and result.session_id == "s-11"
     assert [type(e) for e in events] == [Started, Progress, Final]
     assert_group_gone(record, int(grandchild.read_text()))
 
 
 def test_result_then_clean_exit_is_not_cut_short(tmp_path):
-    # Output after the result still counts while the CLI exits within the wait.
+    # Output after the result still counts while the CLI exits within the wait. The wait is
+    # long so that it does not matter how slowly the CLI writes; the CLI ends the run itself.
     runner, _ = make(
         tmp_path,
-        config={"exit_wait_s": 5},
+        config={"exit_wait_s": 120},
         steps=[out(result="first"), {"sleep": 0.3}, out(text="late text"), out(result="last")],
     )
-    events, result = run_collect(runner.run(req(tmp_path)))
+    events, result = run_collect(runner.run(req(tmp_path, timeout_s=240)))
     assert result.ok and result.text == "last"
     assert Progress("text", "late text") in events
 
 
-def test_exit_wait_never_extends_the_timeout(tmp_path):
-    runner, _ = make(tmp_path, config={"exit_wait_s": 60}, steps=[out(result="x"), {"sleep": 600}])
-    start = time.monotonic()
+def test_exit_wait_never_extends_the_timeout(tmp_path, monkeypatch):
+    ready = tmp_path / "ready"
+    runner, _ = make(
+        tmp_path,
+        config={"exit_wait_s": 60},
+        steps=[out(result="x"), {"ready": str(ready)}, {"sleep": 600}],
+    )
+    clock = start_clock_when_ready(monkeypatch, ready)
     _, result = run_collect(runner.run(req(tmp_path, timeout_s=0.5)))
-    assert time.monotonic() - start < 8
+    assert 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S < 60
+    assert clock.elapsed() < 0.5 + max_stop_s(GRACE) + SCHEDULING_SLACK_S  # not the exit wait
     assert result.ok  # the result had arrived; the timeout only stopped the process
 
 
