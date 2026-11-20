@@ -109,7 +109,8 @@ JSON with `--json`, and accept days as `YYYY-MM-DD`, `today`, `tomorrow`, `yeste
   is `COACH_NAME`. Neither appears in the template.
 - Never put anything from a real athlete into the template: no names, places, paces, heart
   rates, races, dates or quotes. Lessons from a real athlete's history go in as general lessons,
-  in your own words.
+  in your own words, with the reason stated as what generally goes wrong, not as one
+  deployment's past (most deployments had no coach before).
 
 ## Seeding an athlete
 
