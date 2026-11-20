@@ -125,10 +125,14 @@ def test_unknown_or_own_user_is_rejected():
     me = pwd.getpwuid(os.getuid()).pw_name
     with pytest.raises(ValueError, match="another user"):
         switch_from_env({"COACH_AGENT_USER": me})
+    root = pwd.getpwuid(0).pw_name
+    if os.getuid() != 0:
+        with pytest.raises(ValueError, match="not run as root"):
+            switch_from_env({"COACH_AGENT_USER": root})
 
 
 def test_switch_from_env_reads_the_password_database(monkeypatch):
-    other = next((p for p in pwd.getpwall() if p.pw_uid != os.getuid() and p.pw_dir), None)
+    other = next((p for p in pwd.getpwall() if p.pw_uid not in (0, os.getuid()) and p.pw_dir), None)
     if other is None:
         pytest.skip("no second user in the password database")
     switch = switch_from_env({"COACH_AGENT_USER": other.pw_name})

@@ -104,6 +104,8 @@ class UserSwitch:
             entry = pwd.getpwnam(user)
         except KeyError:
             raise ValueError(f"COACH_AGENT_USER={user!r}: no such user") from None
+        if entry.pw_uid == 0:
+            raise ValueError(f"COACH_AGENT_USER={user!r}: the agent must not run as root")
         if entry.pw_uid == os.getuid():
             raise ValueError(
                 f"COACH_AGENT_USER={user!r} is the user this process runs as; the agent must "
