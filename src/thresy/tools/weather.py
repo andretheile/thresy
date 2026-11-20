@@ -7,6 +7,21 @@ recent run can be looked up too.
 
 Sources: https://open-meteo.com/en/docs and https://open-meteo.com/en/docs/geocoding-api.
 Weather codes are WMO codes, turned into short English words here (the agent translates).
+
+Every day also gets a summary in words (``day_summary``), printed ahead of the daily table and
+added to the JSON rows as ``summary``, because a model reading a row of numbers can miss the
+showers and the gusts in it. The words follow fixed thresholds on the same numbers:
+
+* weather: the day's WMO word, which is the worst weather of the day, not all-day weather;
+* rain (``snow`` for snow codes), from the day's amount and highest hourly chance: ``dry``
+  below 0.2 mm with a chance below 30 %, ``rain possible`` below 0.2 mm otherwise (or when the
+  weather code is a precipitation code), ``a little rain`` from 0.2 mm, ``rain`` from 1 mm,
+  ``heavy rain`` from 10 mm;
+* wind, from the highest gust or the highest mean wind, whichever ranks higher: ``little
+  wind``, ``breezy`` from gusts of 30 km/h or wind of 20 km/h, ``windy`` from 50 or 40,
+  ``stormy`` from 75 or 60 (roughly Beaufort 4, 6 and 8 for the mean wind);
+* temperature: ``frost`` at a minimum of 0 °C or below, ``warm`` from a maximum of 25 °C,
+  ``hot`` from 30 °C.
 """
 
 from __future__ import annotations
@@ -80,6 +95,20 @@ WMO_CODES = {
     96: "thunderstorm, hail",
     99: "thunderstorm, hail",
 }
+SNOW_CODES = frozenset({71, 73, 75, 77, 85, 86})
+FIRST_PRECIPITATION_CODE = 51  # 51 and above: drizzle, rain, snow, showers, thunderstorms
+
+# Thresholds of the daily summary (see the module docstring).
+DRY_BELOW_MM = 0.2
+DRY_BELOW_CHANCE = 30
+RAIN_FROM_MM = 1.0
+HEAVY_FROM_MM = 10.0
+GUST_LEVELS_KMH = (30, 50, 75)
+WIND_LEVELS_KMH = (20, 40, 60)
+WIND_WORDS = ("little wind", "breezy", "windy", "stormy")
+FROST_AT_C = 0.0
+WARM_FROM_C = 25.0
+HOT_FROM_C = 30.0
 
 
 class WeatherSettings(BaseSettings):
@@ -256,6 +285,90 @@ def _rows(block: dict[str, Any] | None, fields: tuple[str, ...]) -> list[dict[st
     return rows
 
 
+def _num(value: Any) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _code(value: Any) -> int | None:
+    number = _num(value)
+    return None if number is None else int(number)
+
+
+def rain_words(row: dict[str, Any]) -> str:
+    """``dry``, ``rain possible``, ``a little rain``, ``rain`` or ``heavy rain`` with the
+    numbers behind it, for one daily row."""
+    total = _num(row.get("precipitation_sum"))
+    chance = _num(row.get("precipitation_probability_max"))
+    hours = _num(row.get("precipitation_hours"))
+    code = _code(row.get("weather_code"))
+    noun = "snow" if code in SNOW_CODES else "rain"
+    if total is None and chance is None:
+        return f"{noun}: no data"
+    details = []
+    if total is not None:
+        details.append(f"{total:.1f} mm" + (f" in {hours:.0f} h" if hours else ""))
+    if chance is not None:
+        details.append(f"chance {chance:.0f}%")
+    numbers = f" ({', '.join(details)})"
+    if total is not None and total >= HEAVY_FROM_MM:
+        return f"heavy {noun}{numbers}"
+    if total is not None and total >= RAIN_FROM_MM:
+        return f"{noun}{numbers}"
+    if total is not None and total >= DRY_BELOW_MM:
+        return f"a little {noun}{numbers}"
+    wet_code = code is not None and code >= FIRST_PRECIPITATION_CODE
+    if wet_code or (chance is not None and chance >= DRY_BELOW_CHANCE):
+        return f"{noun} possible{numbers}"
+    return f"{'dry' if total is not None else 'probably dry'}{numbers}"
+
+
+def _level(value: float | None, levels: tuple[int, ...]) -> int:
+    return 0 if value is None else sum(value >= limit for limit in levels)
+
+
+def wind_words(row: dict[str, Any]) -> str:
+    """``little wind``, ``breezy``, ``windy`` or ``stormy`` with the numbers, for one day."""
+    wind = _num(row.get("wind_speed_10m_max"))
+    gusts = _num(row.get("wind_gusts_10m_max"))
+    if wind is None and gusts is None:
+        return "wind: no data"
+    level = max(_level(gusts, GUST_LEVELS_KMH), _level(wind, WIND_LEVELS_KMH))
+    numbers = []
+    if wind is not None:
+        numbers.append(f"wind up to {wind:.0f}")
+    if gusts is not None:
+        numbers.append(f"gusts up to {gusts:.0f}")
+    return f"{WIND_WORDS[level]} ({', '.join(numbers)} km/h)"
+
+
+def temperature_words(row: dict[str, Any]) -> str:
+    low = _num(row.get("temperature_2m_min"))
+    high = _num(row.get("temperature_2m_max"))
+    if low is None and high is None:
+        return "temperature: no data"
+    notes = []
+    if low is not None and low <= FROST_AT_C:
+        notes.append("frost")
+    if high is not None and high >= HOT_FROM_C:
+        notes.append("hot")
+    elif high is not None and high >= WARM_FROM_C:
+        notes.append("warm")
+    text = f"{_n(low)} to {_n(high)} °C"
+    return text + (f", {' and '.join(notes)}" if notes else "")
+
+
+def day_summary(row: dict[str, Any]) -> str:
+    """One line in words from a daily row's numbers, e.g. ``showers; rain (4.2 mm in 5 h,
+    chance 80%); windy (wind up to 30, gusts up to 55 km/h); 2 to 8 °C``."""
+    weather = describe(row.get("weather_code"))
+    parts = [weather if weather != "-" else "weather: no data"]
+    parts += [rain_words(row), wind_words(row), temperature_words(row)]
+    return "; ".join(parts)
+
+
 def fetch_forecast(
     client: httpx.Client, place: Place, *, forecast_days: int, past_days: int = 0
 ) -> Forecast:
@@ -277,12 +390,15 @@ def fetch_forecast(
     if past_days:
         params["past_days"] = past_days
     data = _get(client, FORECAST_URL, params, "forecast")
+    daily = _rows(data.get("daily"), DAILY_FIELDS)
+    for row in daily:
+        row["summary"] = day_summary(row)
     return Forecast(
         place=place,
         timezone=str(data.get("timezone") or "UTC"),
         timezone_abbreviation=str(data.get("timezone_abbreviation") or ""),
         elevation_m=data.get("elevation"),
-        daily=_rows(data.get("daily"), DAILY_FIELDS),
+        daily=daily,
         hourly=_rows(data.get("hourly"), HOURLY_FIELDS),
     )
 
@@ -345,6 +461,14 @@ def format_text(
     if place.alternatives:
         lines.append("Other places with this name: " + "; ".join(place.alternatives))
     if daily:
+        lines += [
+            "",
+            "Daily summary (in words from the table below; the weather word is the worst "
+            "weather of the day; thresholds in `coach weather --help`)",
+        ]
+        for r in daily:
+            day = date.fromisoformat(r["time"])
+            lines.append(f"{day.strftime('%a %m-%d')}: {r.get('summary') or day_summary(r)}")
         lines += [
             "",
             "Daily (whole days, today's hours already past included; plan with the hourly rows)",

@@ -79,8 +79,9 @@ agent's role (`coach_agent` may write `planned_workouts` and `races`), print tex
 JSON with `--json`, and accept days as `YYYY-MM-DD`, `today`, `tomorrow`, `yesterday`, a weekday
 (`fri`: the next one, today included) or `+N`, in the athlete's time zone (`COACH_TZ`).
 
-- **`coach weather [PLACE]`**: Open-Meteo (free, no key). Daily rows for `--days` (default 7) and
-  hourly rows from now to 22:00 today and 6:00–22:00 tomorrow; `--date` (repeatable) picks other
+- **`coach weather [PLACE]`**: Open-Meteo (free, no key). Daily rows for `--days` (default 7),
+  each day first summarised in words with fixed thresholds ("rain", "windy", "frost"; listed in
+  `--help` and `thresy.tools.weather`; JSON field `summary`), and hourly rows from now to 22:00 today and 6:00–22:00 tomorrow; `--date` (repeatable) picks other
   days, up to 16 ahead and 92 back (the weather during a past run). A place is a name, a name with
   a qualifier (`"Springfield, Illinois"`) or `lat,lon`; the output names the place found and
   others with the same name. Default place: **`COACH_HOME_LOCATION`** (own settings class
