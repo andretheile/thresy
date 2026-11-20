@@ -22,7 +22,7 @@ bridge, backups, and the Compose stack.
 - The agent is treated as the least trusted part: it works with its own database role
   (read everything, write only plans, races, segments and outgoing messages), runs as its own
   Unix user, and never sees the Garmin, Telegram or database credentials of the services.
-- **Backup** dumps the database and uploads it, the FIT files and the coach's memory files to a
+- **Backup** dumps the database and uploads it, the FIT files and the coach's memory files and kept scripts to a
   bucket with a create-only credential, optionally encrypted with age.
 - Everything runs as one Docker Compose stack with no published ports.
 

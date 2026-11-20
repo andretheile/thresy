@@ -325,6 +325,7 @@ class RunRequest:
     timeout_s: float = 900
     env: Mapping[str, str] = field(default_factory=dict)   # added to the child environment
     system_append: str | None = None         # extra system instructions; prepended to the prompt if the harness has no such option
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None   # reasoning effort; None = the harness default
 
 @dataclass(frozen=True)
 class Started:  session_id: str | None
@@ -361,6 +362,7 @@ Rules:
 - **Environment.** The child does not inherit the service's environment. It gets an allow-list (basic process variables, the harness's own auth and configuration variables, explicitly configured pass-through names) plus the adapter's configured additions and `req.env`. The bridge uses `req.env` to hand the agent its own database URLs and settings.
 - **No personal text on the command line.** Prompts and appended system instructions reach the harness through stdin or a private temporary file, not through arguments, because arguments are visible to every user on the host. Where a harness offers no alternative, the adapter's docs say so.
 - **Cost** is per run, not cumulative over a resumed session.
+- **Effort** is a hint. An adapter maps it to its CLI's own mechanism or ignores it (`RunnerCapabilities.supports_effort`). A level the harness or model does not accept never costs the answer: a run that fails before producing any output is retried once without the level, so the session id in `Final` can differ from the one in `Started`. The bridge sets the level separately for chat runs and for proactive runs.
 - **Selection.** `get_runner(name, config)` returns the adapter for `claude`, `codex`, `cursor` or `fake`. Model tiers map to concrete model names per runner through config. Unattended-permission flags are adapter config because the container is the sandbox.
 
 ## Transport contract
@@ -377,7 +379,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## CLI contract
 
-`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
+`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init|scripts` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
 
 ## Configuration
 
@@ -423,13 +425,14 @@ An environment allow-list alone does not isolate the agent: a process can read t
 - `AGENTS.md` (with `CLAUDE.md` containing only `@AGENTS.md`): who the coach is, how to behave, which commands exist, where memory lives. It names no athlete.
 - `playbooks/chat.md`, `playbooks/morning-briefing.md`, `playbooks/post-run.md`, plus further playbooks the coach reads on demand (week planning, race preparation). The bridge names the first three in its prompts.
 - `memory/`: Markdown files the coach reads at the start of a session and edits as it learns: `athlete.md`, `places.md`, `fitness.md`, `preferences.md`, `goals.md`, `journal.md`, together about 10 KB at most so they can be read in full every session. The template holds empty skeletons with instructions; a deployment's real files are seeded from `private/` and live only in the workspace volume and its backups.
+- `scripts/`: analysis scripts the agent wrote and decided to keep, because the question will come up again. It belongs to the agent; the template never writes into it, and `playbooks/scripts.md` holds the convention (a header saying what the script answers, how to call it and what its numbers mean; `coach workspace scripts` lists them from those headers). A script useful beyond one athlete is marked as a candidate for the project, and a person carries it into the repository as a tested `coach analysis` command. The agent has no repository credentials and never publishes code: it is the least trusted part, its scripts are written against private data, publication cannot be undone, and code it pushed would later run on the trusted side.
 - `out/` for files the agent produces, `inbox/` for files the athlete sent.
 
 Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat message and it sends nothing in between unless it carries content; the exact reply `NO_REPLY` sends nothing; "last night" means `wake_date` equal to today; numbers come from `coach` commands or SQL, never from memory of earlier conversations; anything it should remember goes into `memory/` or the plan tables, because sessions end daily.
 
 ## Backups
 
-`coach backup run` writes to the target in `COACH_BACKUP_URL` (`file:///path` or `gs://bucket/prefix`): a compressed Postgres dump, original FIT files not yet uploaded, and the workspace's `memory/`. With `COACH_BACKUP_AGE_RECIPIENT` set, everything is encrypted with `age` before it leaves the host. The storage credential can create objects but not read, overwrite or delete them; retention is the bucket's lifecycle policy, not the application's. The last successful backup is recorded in `sync_state`, a failure raises a `backup_failed` event that the bridge reports like `sync_failed`, and `coach backup restore-check` proves a dump can be restored into a scratch database. Secrets are never part of a backup.
+`coach backup run` writes to the target in `COACH_BACKUP_URL` (`file:///path` or `gs://bucket/prefix`): a compressed Postgres dump, original FIT files not yet uploaded, and the workspace's `memory/` and `scripts/`. With `COACH_BACKUP_AGE_RECIPIENT` set, everything is encrypted with `age` before it leaves the host. The storage credential can create objects but not read, overwrite or delete them; retention is the bucket's lifecycle policy, not the application's. The last successful backup is recorded in `sync_state`, a failure raises a `backup_failed` event that the bridge reports like `sync_failed`, and `coach backup restore-check` proves a dump can be restored into a scratch database. Secrets are never part of a backup.
 
 ## Rules for work packages
 

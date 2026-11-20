@@ -229,8 +229,9 @@ the token expires within three days.
 
 The bridge's start script runs `coach workspace init` before the chat loop: on the first start it
 copies the template from the image (`AGENTS.md`, `CLAUDE.md`, `playbooks/`, a `memory/` skeleton,
-`out/`, `inbox/`) into the `workspace` volume; on later starts it updates only `AGENTS.md`,
-`CLAUDE.md` and `playbooks/` and never touches `memory/` or anything the agent created.
+`out/`, `inbox/`, an empty `scripts/`) into the `workspace` volume; on later starts it updates
+only `AGENTS.md`, `CLAUDE.md` and `playbooks/` and never touches `memory/`, `scripts/` or
+anything else the agent created.
 
 The athlete's own memory files (profile, physiology and paces, preferences, goals; written for
 this athlete, never committed) go into `memory/`. Keep them on the server outside git, for
