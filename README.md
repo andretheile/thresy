@@ -122,6 +122,12 @@ throwaway container (they need Docker; nothing is kept): `sh docker/isolation-te
 agent's separate Unix user, with the real setuid helper) and `sh docker/backup-test.sh` (backups
 with the real `pg_dump`, `pg_restore` and `age`, against the development Postgres).
 
+Continuous integration ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the same
+commands on every push to `main` and every pull request: lint and format check, the whole test
+suite against the development Postgres, both scripts above, and a build of the application image
+without an agent CLI (`AGENT_CLI=none`). It needs no secrets and downloads only images and
+packages; it never reaches Garmin, Telegram or a model provider.
+
 ## Deployment
 
 [docs/deploy.md](docs/deploy.md) walks through a first deployment step by step. In short:

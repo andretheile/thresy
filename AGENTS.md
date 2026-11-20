@@ -22,8 +22,15 @@ uv run pytest                               # all tests; database tests skip if 
 COACH_LEGACY_DIR=./legacy uv run --group legacy pytest tests/legacy_parity   # parity with the old bot
 uv run ruff check                           # lint
 uv run ruff format                          # format (CI-style check: ruff format --check)
+sh docker/isolation-test.sh                 # agent user switch on Linux, in a throwaway image
+sh docker/backup-test.sh                    # backups with real pg_dump/pg_restore/age (needs the dev Postgres)
 ```
 
 Tests create a fresh database per session on the dev Postgres and drop it afterwards
 (override the server with `COACH_TEST_ADMIN_URL`). Do not build the app image locally; check
 Compose files with `docker compose -f compose.yml config`.
+
+CI (`.github/workflows/ci.yml`) runs these same commands on every push to `main` and every pull
+request: lint and format check, `pytest` against the dev Postgres from `compose.dev.yml`, both
+`docker/*-test.sh` scripts, and a build of `docker/Dockerfile` with `AGENT_CLI=none`. To
+reproduce a CI failure, run the failing job's command locally.
