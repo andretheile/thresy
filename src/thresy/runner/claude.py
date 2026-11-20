@@ -27,6 +27,7 @@ from .classify import classify_text, kind_from_http_status, summarize_tool
 from .cli_base import CliRunner, Invocation, StreamParser, private_file, usage_dict
 from .config import HarnessConfig
 from .core import ErrorKind, Progress, RunEvent, RunnerCapabilities, RunRequest, RunResult, Started
+from .isolation import UserSwitch
 from .process import ProcessExit
 
 log = logging.getLogger(__name__)
@@ -251,8 +252,14 @@ class ClaudeRunner(CliRunner):
     env_blocked = frozenset({"CLAUDE_CODE_SIMPLE"})  # bare mode, see module docstring
     verified = True
 
-    def __init__(self, config: HarnessConfig | None = None, *, kill_grace_s: float | None = None):
-        super().__init__(config, kill_grace_s=kill_grace_s)
+    def __init__(
+        self,
+        config: HarnessConfig | None = None,
+        *,
+        kill_grace_s: float | None = None,
+        switch: UserSwitch | None = None,
+    ):
+        super().__init__(config, kill_grace_s=kill_grace_s, switch=switch)
         if "--bare" in (*self.config.extra_args, *self.permission_args):
             raise ValueError(
                 "--bare is not allowed: bare mode ignores CLAUDE_CODE_OAUTH_TOKEN "
@@ -269,7 +276,9 @@ class ClaudeRunner(CliRunner):
             argv += ["--resume", req.session_id]
         temp_dirs: tuple = ()
         if req.system_append:
-            directory, path = private_file(req.system_append, "system-append.md")
+            directory, path = private_file(
+                req.system_append, "system-append.md", group=self.private_group
+            )
             temp_dirs = (directory,)
             argv += ["--append-system-prompt-file", str(path)]
         argv += [*self.permission_args, *self.config.extra_args]

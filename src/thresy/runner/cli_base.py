@@ -29,6 +29,7 @@ from .core import (
 )
 from .environment import allowed_environment
 from .handle import RunContext, RunHandle
+from .isolation import UserSwitch
 from .process import DEFAULT_GRACE_S, ChildProcess, ProcessExit, SpawnError, run_capture
 
 log = logging.getLogger(__name__)
@@ -51,16 +52,26 @@ class Invocation:
             shutil.rmtree(path, ignore_errors=True)
 
 
-def private_file(content: str, name: str) -> tuple[Path, Path]:
+def private_file(content: str, name: str, *, group: int | None = None) -> tuple[Path, Path]:
     """Write `content` to a new file only this user can read; returns (dir, file).
 
     Used instead of command-line arguments, which every user on the host can
-    read via `ps`."""
+    read via `ps`. With `group` (the agent user's group when the agent runs as
+    its own user) members of that group may read it as well."""
     directory = Path(tempfile.mkdtemp(prefix="thresy-runner-"))  # mode 0700
     path = directory / name
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        if group is not None:
+            os.chown(path, -1, group)
+            path.chmod(0o640)
+            os.chown(directory, -1, group)
+            directory.chmod(0o750)
+    except OSError:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
     return directory, path
 
 
@@ -191,9 +202,17 @@ class CliRunner(ABC):
     verified: ClassVar[bool] = False
     """Whether this adapter has been run against the real CLI."""
 
-    def __init__(self, config: HarnessConfig | None = None, *, kill_grace_s: float | None = None):
+    def __init__(
+        self,
+        config: HarnessConfig | None = None,
+        *,
+        kill_grace_s: float | None = None,
+        switch: UserSwitch | None = None,
+    ):
         self.config = config or HarnessConfig()
         self.kill_grace_s = DEFAULT_GRACE_S if kill_grace_s is None else kill_grace_s
+        self.switch = switch
+        """Run the CLI as another Unix user (see thresy.runner.isolation); None: as this one."""
 
     # -- configuration -------------------------------------------------------------
 
@@ -237,6 +256,11 @@ class CliRunner(ABC):
                 return found
         return None
 
+    @property
+    def private_group(self) -> int | None:
+        """Group for private files the CLI must read (the agent user's, when switching)."""
+        return self.switch.gid if self.switch is not None else None
+
     def binary_names(self) -> str:
         return ", ".join((self.config.binary,) if self.config.binary else self.default_binaries)
 
@@ -270,7 +294,12 @@ class CliRunner(ABC):
         try:
             log.debug("%s: starting %s in %s", self.name, inv.argv[0], cwd)
             child = ChildProcess(
-                inv.argv, cwd=cwd, env=env, stdin_data=inv.stdin, grace_s=self.kill_grace_s
+                inv.argv,
+                cwd=cwd,
+                env=env,
+                stdin_data=inv.stdin,
+                grace_s=self.kill_grace_s,
+                switch=self.switch,
             )
             try:
                 async with child:
@@ -356,7 +385,9 @@ class CliRunner(ABC):
     async def capture(
         self, argv: list[str], env: Mapping[str, str], timeout_s: float = 20.0
     ) -> tuple[ProcessExit, str]:
-        return await run_capture(argv, env=env, cwd=tempfile.gettempdir(), timeout_s=timeout_s)
+        return await run_capture(
+            argv, env=env, cwd=tempfile.gettempdir(), timeout_s=timeout_s, switch=self.switch
+        )
 
 
 def redact(text: str) -> str:

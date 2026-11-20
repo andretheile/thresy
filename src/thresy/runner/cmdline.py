@@ -133,6 +133,11 @@ def main(argv: list[str] | None = None, environ: Mapping[str, str] | None = None
     chk = sub.add_parser("check", help="check that a runner's CLI is installed and logged in")
     chk.add_argument("--runner", help="claude, codex, cursor or fake (default: COACH_RUNNER)")
     chk.add_argument("--all", action="store_true", help="check every runner")
+    chk.add_argument(
+        "--isolation",
+        action="store_true",
+        help="instead: check that the agent runs as its own user, apart from the bridge",
+    )
     chk.add_argument("--json", action="store_true", help="print JSON")
 
     run = sub.add_parser("run", help="run a prompt and print events as they arrive")
@@ -153,6 +158,13 @@ def main(argv: list[str] | None = None, environ: Mapping[str, str] | None = None
     )
     try:
         config = RunnerConfig.from_env(environ)
+        if args.command == "check" and args.isolation:
+            from . import selftest
+
+            runner_names(args.runner, False, config)
+            report = selftest.run(config, environ=environ, runner=args.runner)
+            print(json.dumps(report.as_dict(), indent=2) if args.json else report.text())
+            return 0 if report.ok else 1
         if args.command == "check":
             names = runner_names(args.runner, args.all, config)
             healths = asyncio.run(check(names, config))

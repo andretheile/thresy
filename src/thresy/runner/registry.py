@@ -25,4 +25,4 @@ def get_runner(name: str | None = None, config: RunnerConfig | None = None) -> A
     cls = _CLI_RUNNERS.get(name)
     if cls is None:
         raise ValueError(f"unknown runner {name!r}; expected one of {', '.join(RUNNER_NAMES)}")
-    return cls(config.harness(name))
+    return cls(config.harness(name), switch=config.user_switch)

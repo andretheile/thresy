@@ -4,6 +4,10 @@ The child runs in its own session and therefore its own process group, so the
 CLI and everything it starts (shell commands, sub-agents) can be stopped
 together. stdout is read line by line; stderr is drained concurrently into a
 bounded tail so a chatty child can never block on a full pipe.
+
+With a UserSwitch (see thresy.runner.isolation) the child is started as another
+Unix user through a setuid helper, and signals to its group go through the same
+helper.
 """
 
 from __future__ import annotations
@@ -16,6 +20,10 @@ import signal
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .isolation import SignalOutcome, UserSwitch
 
 log = logging.getLogger(__name__)
 
@@ -72,12 +80,15 @@ class ChildProcess:
         env: Mapping[str, str],
         stdin_data: bytes | None = None,
         grace_s: float = DEFAULT_GRACE_S,
+        switch: UserSwitch | None = None,
     ) -> None:
         self.argv = list(argv)
         self.cwd = cwd
         self.env = dict(env)
         self.stdin_data = stdin_data
         self.grace_s = grace_s
+        self.switch = switch
+        """Start the child as another user (None: as this process's user)."""
         self.exit: ProcessExit | None = None
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_buf = bytearray()
@@ -114,11 +125,16 @@ class ChildProcess:
             self._timed_out = True
 
     async def __aenter__(self) -> ChildProcess:
+        argv, env, extra = self.argv, self.env, {}
+        if self.switch is not None:
+            argv = self.switch.wrap(argv)
+            env = self.switch.environment(env)
+            extra["umask"] = self.switch.umask
         try:
             self._proc = await asyncio.create_subprocess_exec(
-                *self.argv,
+                *argv,
                 cwd=self.cwd,
-                env=self.env,
+                env=env,
                 stdin=(
                     asyncio.subprocess.PIPE
                     if self.stdin_data is not None
@@ -127,9 +143,10 @@ class ChildProcess:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
+                **extra,
             )
         except OSError as exc:
-            raise SpawnError(f"{exc.strerror or exc} ({self.argv[0]})") from exc
+            raise SpawnError(f"{exc.strerror or exc} ({argv[0]})") from exc
         except ValueError as exc:  # for example a NUL byte in an argument
             raise SpawnError(f"invalid command line: {exc}") from exc
         self._stderr_task = asyncio.create_task(self._drain_stderr())
@@ -272,6 +289,18 @@ class ChildProcess:
             return True
         return True
 
+    async def _signal_group(self, pgid: int, sig: int) -> SignalOutcome:
+        if self.switch is not None:
+            return await self.switch.signal_group(pgid, sig)
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return "gone"
+        except PermissionError:
+            log.warning("not permitted to signal process group %d", pgid)
+            return "failed"
+        return "sent"
+
     async def _stop_group(self) -> None:
         """SIGINT, then SIGTERM, then SIGKILL to the whole group, each with a
         grace period, until the CLI has exited and the group is empty."""
@@ -283,13 +312,11 @@ class ChildProcess:
             (signal.SIGTERM, self.grace_s),
             (signal.SIGKILL, KILL_WAIT_S),
         ):
-            try:
-                os.killpg(pgid, sig)
-            except ProcessLookupError:
+            outcome = await self._signal_group(pgid, sig)
+            if outcome == "gone":
                 break
-            except PermissionError:
-                log.warning("not permitted to signal process group %d", pgid)
-                break
+            if outcome == "failed" and self.switch is None:
+                break  # without a helper there is nothing else to try
             if await self._wait_gone(wait_s):
                 break
         else:
@@ -338,11 +365,12 @@ async def run_capture(
     cwd: Path | str,
     timeout_s: float = 20.0,
     grace_s: float = 1.0,
+    switch: UserSwitch | None = None,
 ) -> tuple[ProcessExit, str]:
     """Run a short command (for example `--version`) and return its exit info
     and stdout. Raises SpawnError if it cannot be started."""
     out: list[str] = []
-    child = ChildProcess(argv, cwd=cwd, env=env, grace_s=grace_s)
+    child = ChildProcess(argv, cwd=cwd, env=env, grace_s=grace_s, switch=switch)
     async with child:
         async for line in child.lines(timeout_s=timeout_s):
             out.append(line)
