@@ -64,8 +64,9 @@ an hour later on the clock.
 
 Right after it starts, the service runs once (after a minute) if there is no successful backup
 since the last scheduled time: on a new deployment, or when the service was down or failed when
-a run was due. A restart between two scheduled times changes nothing, also with weekly runs. A
-failed run is retried after an hour, twice; after that the next scheduled time is awaited.
+a run was due. A restart after the last scheduled run succeeded changes nothing, also days later
+with weekly runs. A failed run is retried after an hour, twice; after that the next scheduled
+time is awaited.
 
 A restore check can only happen during a backup. A run includes one when the last successful
 check is `COACH_BACKUP_RESTORE_CHECK_DAYS` days old, counted with half a day's tolerance so that
