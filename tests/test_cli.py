@@ -135,3 +135,66 @@ def test_db_migrate_without_url_fails_cleanly(monkeypatch, tmp_path) -> None:
         assert "COACH_DATABASE_URL" in json.loads(result.output)["error"]
     finally:
         get_settings.cache_clear()
+
+
+# -- plain help for the agent and for pipes -------------------------------------------------------
+
+FORCING = {"GITHUB_ACTIONS": "true", "FORCE_COLOR": "0", "PY_COLORS": "1", "TTY_COMPATIBLE": "1"}
+
+
+def _coach_output(args: list[str], env: dict[str, str], *, terminal: bool) -> str:
+    """Run ``coach`` in a fresh interpreter (typer reads the environment at import) with stdout
+    on a pipe or on a pseudo-terminal."""
+    import os
+    import pty
+    import subprocess
+
+    argv = [sys.executable, "-c", "from thresy.cli import main; main()", *args]
+    env = {**os.environ, **env}
+    if not terminal:
+        proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=60)
+        return proc.stdout
+    leader, follower = pty.openpty()
+    proc = subprocess.Popen(
+        argv, env=env, stdin=subprocess.DEVNULL, stdout=follower, stderr=subprocess.DEVNULL
+    )
+    os.close(follower)
+    chunks = []
+    try:
+        while True:
+            try:
+                data = os.read(leader, 65536)
+            except OSError:  # Linux: EIO once the child has closed the terminal
+                break
+            if not data:
+                break
+            chunks.append(data)
+    finally:
+        os.close(leader)
+        proc.wait(timeout=60)
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("name", sorted(FORCING))
+def test_help_on_a_pipe_is_plain_whatever_forces_a_terminal(name) -> None:
+    out = _coach_output(["sql", "--help"], {name: FORCING[name]}, terminal=False)
+    assert "\x1b" not in out
+    assert "wake_date" in out and "--limit" in out
+
+
+def test_help_on_a_terminal_keeps_its_styling() -> None:
+    out = _coach_output(["sql", "--help"], FORCING, terminal=True)
+    assert "\x1b[" in out
+
+
+def test_plain_unless_terminal_leaves_rich_alone_without_a_forcing_variable(monkeypatch) -> None:
+    from typer import rich_utils
+
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", None)
+    cli.plain_unless_terminal()  # the autouse fixture removed every forcing variable
+    assert rich_utils.FORCE_TERMINAL is None
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    cli.plain_unless_terminal(types.SimpleNamespace(isatty=lambda: True))
+    assert rich_utils.FORCE_TERMINAL is None  # a terminal keeps what typer decided
+    cli.plain_unless_terminal(types.SimpleNamespace(isatty=lambda: False))
+    assert rich_utils.FORCE_TERMINAL is False
