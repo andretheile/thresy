@@ -101,6 +101,19 @@ it the bridge passes exactly:
 | `COACH_HOME_LOCATION` | as configured, if set (the default place of `coach weather`) |
 | `COACH_RUN_ID` | the `agent_runs.id` of this run |
 
+**Model tier and reasoning effort** are chosen per kind of run: runs that answer the athlete
+use `COACH_BRIDGE_CHAT_TIER` and `COACH_BRIDGE_CHAT_EFFORT`, the morning briefing and the
+debrief (also when they are combined into one run) `COACH_BRIDGE_PROACTIVE_TIER` and
+`COACH_BRIDGE_PROACTIVE_EFFORT`. A higher effort gives better answers at the price of time and
+subscription usage, and chat answers keep someone waiting on a phone while nobody waits for the
+briefing, so the proactive level can sensibly be the higher one. The level is a harness-neutral
+hint (`RunRequest.effort`): each runner maps it to its CLI's own setting, a runner without one
+(Cursor) ignores it, a level the model lacks never fails the run, and an effort set directly in
+the harness's own configuration (for Claude Code `CLAUDE_CODE_EFFORT_LEVEL` in
+`COACH_CLAUDE_ENV`) overrides both settings (docs/runners.md, "Reasoning effort"). Each run's
+tier and level are in the bridge log ("run 12 (user_message) for chat …: resumed session, tier
+smart, effort high").
+
 Never the Telegram token, the read/write database URL or the Garmin credentials;
 `tests/bridge/test_agent_env.py` checks this with a real CLI child process. The bridge refuses
 to start when `COACH_AGENT_DATABASE_URL` equals `COACH_DATABASE_URL`.
@@ -260,6 +273,7 @@ belongs to `coach weather`, `thresy.tools.weather.WeatherSettings`). The bridge'
 | `COACH_BRIDGE_SYNC_FAILED_WINDOW_H` | `6` | |
 | `COACH_BRIDGE_RUN_TIMEOUT_S` | `900` | per agent run |
 | `COACH_BRIDGE_CHAT_TIER` / `COACH_BRIDGE_PROACTIVE_TIER` | `smart` / `smart` | model tier |
+| `COACH_BRIDGE_CHAT_EFFORT` / `COACH_BRIDGE_PROACTIVE_EFFORT` | unset / unset | reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`; unset: the harness's default (below) |
 | `COACH_BRIDGE_CONTEXT_MESSAGES` | `20` | context for a fresh session |
 | `COACH_BRIDGE_CONTEXT_CHARS` | `6000` | |
 | `COACH_BRIDGE_CONTEXT_HOURS` | `36` | |
@@ -351,6 +365,10 @@ No real Telegram bot and no real agent CLI were available while this was built.
 - **Agent CLI:** the bridge was only run with the fake runner and, for the environment test,
   a script that imitates the Claude Code stream. How a real harness reacts to the prompts,
   `NO_REPLY` and `coach send` is untested.
+- **Reasoning effort:** that the levels from `COACH_BRIDGE_CHAT_EFFORT` and
+  `COACH_BRIDGE_PROACTIVE_EFFORT` reach the runner per kind of run is tested with the fake
+  runner; that Claude Code applies them was not checked with a real run (docs/runners.md,
+  "Checking the effort level", says how).
 - **Process behaviour:** SIGTERM handling of `coach bridge run` inside the container and the
   timing against Docker's stop timeout were not exercised end to end.
 - **Security:** in the container the agent runs as its own Unix user (`COACH_AGENT_USER`,

@@ -4,7 +4,7 @@
 
 | Adapter | CLI | Status |
 |---|---|---|
-| `claude` (default) | Claude Code | Verified against Claude Code 2.1.327 with real runs |
+| `claude` (default) | Claude Code | Verified against Claude Code 2.1.327 with real runs, except the effort flag (see [Reasoning effort](#reasoning-effort)) |
 | `codex` | OpenAI Codex CLI | Written from official docs; **not yet run against the real CLI** |
 | `cursor` | Cursor CLI (`agent`) | Written from official docs; **not yet run against the real CLI**; **puts the prompt on the command line** (see [Cursor](#cursor-cli-not-yet-verified)) |
 | `fake` | none | In-process runner for tests of other packages |
@@ -22,6 +22,7 @@ req = RunRequest(
     cwd=Path("/srv/coach/workspace"),
     session_id=todays_session_id,  # None starts a new session
     model_tier="smart",  # or "fast"
+    effort="high",  # low | medium | high | xhigh | max; None: the harness's default
     timeout_s=900,
     env={"COACH_DATABASE_URL": agent_database_url},  # what the agent may see
 )
@@ -130,13 +131,47 @@ The coach's memory is the workspace's `memory/` files (docs/ARCHITECTURE.md, pri
 
 `COACH_<NAME>_ENV` and `COACH_<NAME>_ARGS` come later on the command line and in the environment, so they could switch a memory back on; do not. The same goes for the agent's own credential file (applied last, see [The agent's own Unix user](#the-agents-own-unix-user)): this keeps the coach from using a harness memory by accident; it does not stop an agent that sets out to. Notes Claude Code wrote before this setting existed stay in the agent's home but are no longer loaded; delete them there if you want them gone.
 
+### Reasoning effort
+
+`RunRequest.effort` is a harness-neutral hint: `low`, `medium`, `high`, `xhigh` or `max` (`thresy.runner.EFFORTS`, lowest first), or `None` for the harness's (or model's) default. The bridge sets it per kind of run (`COACH_BRIDGE_CHAT_EFFORT`, `COACH_BRIDGE_PROACTIVE_EFFORT`, docs/bridge.md); `coach runner run --effort` tries a level by hand. `RunnerCapabilities.supports_effort` says whether it reaches the harness; an adapter without it ignores the hint.
+
+| Harness | Mechanism | A level the model lacks | Documentation relied on (checked 2026-11) |
+|---|---|---|---|
+| Claude Code | `--effort <level>`, same names | Claude Code runs it at the highest level the model has below it | CLI reference, `--effort`: "Set the effort level for the current session. Options: `low`, `medium`, `high`, `xhigh`, `max`, or `ultracode`. Available levels depend on the model. [...] On the main conversation's model, overrides the `modelSettings` and `effortLevel` settings for this session and doesn't persist". Model configuration: "If you set a level the active model does not support, Claude Code falls back to the highest supported level at or below the one you set. For example, `xhigh` runs as `high` on Opus 4.6." |
+| Codex | `-c model_reasoning_effort="<level>"`, same names | Not documented; the runner's retry (below) covers a rejection | Configuration reference, `model_reasoning_effort`: "Reasoning effort advertised by the selected model, such as `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. Available levels depend on the model and client." CLI reference, `--config, -c`: "Override configuration values. Values parse as TOML if possible; otherwise the literal string is used." |
+| Cursor CLI | None: the hint is ignored (`supports_effort=False`) | | Parameters reference: no option for effort or reasoning (`--model <model>`: "Model to use"); configuration reference: no such key or variable. Reasoning variants are part of some model names (`/model sonnet-4-thinking`), so choose one through `COACH_CURSOR_MODEL_*` |
+
+**Claude Code: the flag, not the variable.** Claude Code resolves the level from, in this order: "1. The `CLAUDE_CODE_EFFORT_LEVEL` environment variable 2. A level you pick in the session, such as with `/effort` [...] 3. Launching with `--effort` 4. Your settings [...] 5. The model's default effort" (model configuration). The adapter passes `--effort` deliberately:
+
+- It is the documented per-session mechanism and "doesn't persist", which matches a per-run hint; each run (also a resumed one) starts the CLI anew with its own level.
+- It outranks the settings files in the agent's home (`effortLevel`, `modelSettings`), which the agent could edit.
+- It leaves `CLAUDE_CODE_EFFORT_LEVEL` as the operator's override: set in `COACH_CLAUDE_ENV` or the agent's credential file, it wins over every per-run level ("Takes precedence over `--effort`, `/effort`, and the `modelSettings` and `effortLevel` settings", env-vars reference), and `auto` there makes Claude Code send no level at all. Had the adapter used the variable, an operator could not override it without a code change. A `--effort` in `COACH_CLAUDE_ARGS` also wins, because it comes later on the command line.
+
+`--effort xhigh` needs Claude Code 2.1.111 or later (changelog: "Added `xhigh` effort level [...] Available via `/effort`, `--effort`, and the model picker"); the image pins a later version. Without a level, Opus 5.5, Sonnet 5.5 and Haiku 5.5 run at `medium` (model configuration: they "default to `medium`"), which is what the `smart` tier (`sonnet`) gets today. Claude Code's changelog suggests that changing the level within a session invalidates the prompt cache on most models; chat and proactive runs share the day's session, so different levels for the two cost one cache re-read when one follows the other within the cache's lifetime.
+
+**Never failing a run over effort.** A level the harness or model does not accept must not cost the answer. Claude Code documents its fallback; Codex documents none, and a CLI older than a level may reject the argument. So when a run that was given a level ends with `other` or `crash` *before any output* (no text, no tool call; so nothing was done), the shared CLI runner starts it once more without a level, within the time left of `timeout_s`, and logs a warning. Auth, rate-limit, timeout and cancelled failures are not retried, nor is a run that had already produced output. The caller sees one run: at most one `Started` (the first; the final result carries the session id of the attempt that answered) and one `Final`.
+
+**Not verified with a real run.** The Claude Code adapter was verified with real runs before this was added; the effort flag was not run here. One real run on the server settles it (see [Checking the effort level](#checking-the-effort-level)). The Codex mapping is as unverified as the rest of that adapter.
+
+#### Checking the effort level
+
+In the bridge container, with the agent user as in production, on the fast tier (cheap) and in an empty directory (no brief):
+
+```sh
+docker compose exec bridge coach runner run --cwd /tmp --tier fast --effort high --json "Reply with exactly OK"
+docker compose exec -u agent bridge sh -c 'grep -ho "\"effort[^,}]*" /home/agent/.claude/projects/-tmp/*.jsonl | sort | uniq -c'
+docker compose exec -u agent bridge sh -c 'rm -f /home/agent/.claude/projects/-tmp/*.jsonl'
+```
+
+Check that (1) the run ends with `"ok": true` and the text `OK`, and no line says "retrying once without an effort setting" (that would mean the pinned CLI rejected `--effort high`); (2) the session transcript names the level `high` (Claude Code's changelog says transcripts record the effort in force; if the field is named differently, look for the level next to the request); (3) neither `COACH_CLAUDE_ENV`, `COACH_CLAUDE_ARGS` nor the agent's credential file sets `CLAUDE_CODE_EFFORT_LEVEL` or `--effort`, which would override the bridge's levels. To check a resumed session as well, repeat the first command with `--resume <session id from the first run> --effort low` and look for `low` in the same transcript.
+
 ## Claude Code
 
 ### Command line
 
 ```
 claude -p --output-format stream-json --verbose
-       [--model <model>] [--resume <session_id>]
+       [--model <model>] [--resume <session_id>] [--effort <level>]
        [--append-system-prompt-file <private temporary file>]
        --permission-mode bypassPermissions --permission-prompts none
        [COACH_CLAUDE_ARGS]
@@ -151,6 +186,7 @@ The prompt goes to stdin and `RunRequest.system_append` to a file in a new direc
 | `--verbose` | Required by `stream-json` in print mode | docs, real run |
 | `--model haiku` / `sonnet` | Model alias per tier; also passed on resume because a resumed session otherwise keeps its saved model | docs, `--help`, real run (haiku) |
 | `--resume <id>` | Continue a session; the session id stays the same | docs, `--help`, real run |
+| `--effort <level>` | `RunRequest.effort` (see [Reasoning effort](#reasoning-effort)) | docs only; **not yet run** |
 | `--append-system-prompt-file <path>` | `RunRequest.system_append` | docs (CLI reference), `--help` (mentioned in the `--bare` text only), real run |
 | `--permission-mode bypassPermissions` | No approval prompts (`-p` starts in Manual mode since 2.1.302 and would deny tool calls) | docs, `--help`, real run |
 | `--permission-prompts none` | Anything that would still prompt is denied instead of waited on; removes `AskUserQuestion`. Needs Claude Code ≥ 2.1.259 | docs, `--help`, real run |
@@ -193,7 +229,7 @@ Built from developers.openai.com/codex (non-interactive mode, CLI reference, con
 
 ```
 codex exec --json --skip-git-repo-check --cd <cwd> -c features.memories=false
-      [--model <model>]
+      [-c model_reasoning_effort="<level>"] [--model <model>]
       --dangerously-bypass-approvals-and-sandbox
       [COACH_CODEX_ARGS]
       [resume <session_id>] -
@@ -204,6 +240,7 @@ codex exec --json --skip-git-repo-check --cd <cwd> -c features.memories=false
 - All options come before `resume`: in `cli.rs`, `--json`, `--model`, `--skip-git-repo-check` and the bypass flag are global, but `--cd` and `--sandbox` are not.
 - `--skip-git-repo-check` because the coach workspace need not be a Git repository.
 - `-c features.memories=false` keeps Codex's memories off (see [No memory of the harness's own](#no-memory-of-the-harnesss-own)); the CLI reference lists `-c, --config` among the `codex exec` options.
+- `-c model_reasoning_effort="<level>"` carries `RunRequest.effort` (the level names are Codex's own; see [Reasoning effort](#reasoning-effort)).
 - Events: `thread.started` → `Started(thread_id)`; `item.*` with `agent_message` → text progress (the last one is the answer); `command_execution`, `file_change`, `mcp_tool_call`, `web_search`, `collab_tool_call` → one tool line; `turn.completed` → success and usage; `turn.failed` / `error` → failure, classified from the message text. `turn.completed` and `turn.failed` start the exit wait. Codex reports no cost.
 - Models: no default; set `COACH_CODEX_MODEL_FAST/SMART` (model names change often; see the Codex models page).
 - Authentication: `codex login --device-auth` on the server (or copy `~/.codex/auth.json`, which is a password-equivalent file; `CODEX_HOME` moves it), or `CODEX_API_KEY` for API billing. The healthcheck runs `codex login status` (exit code 0 when logged in).
@@ -225,6 +262,7 @@ agent -p --output-format stream-json --workspace <cwd>
 - The prompt is an argument after `--` (so a prompt starting with `-` is not read as an option). The `--resume=<id>` form is used because `--resume` takes an optional value.
 - `--trust` skips the workspace-trust prompt in headless mode; `--force` allows all commands.
 - No system-prompt option exists (`supports_system_append=False`), so `system_append` is prepended to the prompt. Cursor also reads `AGENTS.md` from the workspace.
+- No effort option exists either (`supports_effort=False`): `RunRequest.effort` is ignored (see [Reasoning effort](#reasoning-effort)).
 - The terminal `result` concatenates all assistant segments without separators, so the adapter uses the last assistant message (the text after the last tool call) as the answer. The `result` event starts the exit wait.
 - On failure Cursor exits non-zero with a message on stderr and may emit no `result`; the adapter classifies that message.
 - No usage or cost is reported.
@@ -284,6 +322,7 @@ Neither the stop sequence nor its timing changes: SIGINT, SIGTERM, SIGKILL with 
 coach runner check [--runner NAME | --all] [--json]
 coach runner check --isolation [--json]                                     # see above
 coach runner run --cwd DIR [--runner NAME] [--resume ID] [--tier fast|smart]
+                 [--effort low|medium|high|xhigh|max]
                  [--timeout S] [--system-append TEXT] [--json] PROMPT     # "-" reads stdin
 ```
 
@@ -291,13 +330,13 @@ coach runner run --cwd DIR [--runner NAME] [--resume ID] [--tier fast|smart]
 
 ## Tests and fixtures
 
-`tests/runner/fixtures/claude/claude_new_session.jsonl`, `claude_resume_tool_call.jsonl` and `claude_auth_invalid_token.jsonl` are real Claude Code output with ids, paths, tool lists and usage figures replaced by synthetic values. All other fixtures are synthetic, built from the documentation of each CLI. The subprocess tests generate a small fake CLI in Python and check streaming, garbage lines, non-zero exits, timeouts, SIGKILL escalation, cancellation, a CLI that lingers after its result, the environment allow-list, the private system-prompt file, and that the process group is gone afterwards. Run them alone with `uv run pytest tests/runner` or as part of `uv run pytest`.
+`tests/runner/fixtures/claude/claude_new_session.jsonl`, `claude_resume_tool_call.jsonl` and `claude_auth_invalid_token.jsonl` are real Claude Code output with ids, paths, tool lists and usage figures replaced by synthetic values. All other fixtures are synthetic, built from the documentation of each CLI. The subprocess tests generate a small fake CLI in Python and check streaming, garbage lines, non-zero exits, timeouts, SIGKILL escalation, cancellation, a CLI that lingers after its result, the environment allow-list, the private system-prompt file, the retry without an effort level, and that the process group is gone afterwards. Run them alone with `uv run pytest tests/runner` or as part of `uv run pytest`.
 
 To capture a new fixture from a real CLI: run it in an empty temporary directory with the cheapest model and a trivial prompt, then replace everything personal (ids, paths, e-mail addresses, organisation ids, host names, tool and plugin lists) before committing.
 
 ## Adding another harness
 
-1. Read the CLI's current documentation for non-interactive mode, JSON event output, session resume, model selection, unattended approvals, an auth-status command, the environment variables it reads for auth and configuration, and a stdin or file route for the prompt and extra instructions. Confirm every flag with `--help`.
-2. Add `src/thresy/runner/<name>.py` with a `StreamParser` subclass (`feed` maps one JSON object to `Started`/`Progress` events and sets `terminal_seen` on the final result; `finish` builds the `RunResult` from what it saw and the `ProcessExit`) and a `CliRunner` subclass (`name`, `capabilities`, `default_binaries`, `default_models`, `default_permission_args`, `env_names`/`env_prefixes`, `verified`, `build_invocation`, `new_parser`, `check_auth`, and `static_warnings` if personal text must go on the command line). Use `classify_text`, `summarize_tool`, `failure_from_exit`, `private_file` and `prepend_system` from the base modules.
+1. Read the CLI's current documentation for non-interactive mode, JSON event output, session resume, model selection, reasoning effort, unattended approvals, an auth-status command, the environment variables it reads for auth and configuration, and a stdin or file route for the prompt and extra instructions. Confirm every flag with `--help`.
+2. Add `src/thresy/runner/<name>.py` with a `StreamParser` subclass (`feed` maps one JSON object to `Started`/`Progress` events and sets `terminal_seen` on the final result; `finish` builds the `RunResult` from what it saw and the `ProcessExit`) and a `CliRunner` subclass (`name`, `capabilities`, `default_binaries`, `default_models`, `default_permission_args`, `env_names`/`env_prefixes`, `verified`, `build_invocation`, `new_parser`, `check_auth`, and `static_warnings` if personal text must go on the command line; map `RunRequest.effort` in `build_invocation` and set `capabilities.supports_effort`, or leave it `False` when the CLI has no such setting). Use `classify_text`, `summarize_tool`, `failure_from_exit`, `private_file` and `prepend_system` from the base modules.
 3. Register it in `registry.py`, add its name to `RUNNER_NAMES` and a field to `RunnerConfig`.
 4. Add fixtures and tests under `tests/runner/`, and a section here. Mark it unverified until it has been run against the real CLI.

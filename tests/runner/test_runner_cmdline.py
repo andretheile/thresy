@@ -28,6 +28,26 @@ def test_run_json(tmp_path, capsys):
     assert events[-1]["result"]["ok"] is True
 
 
+def test_run_with_effort(tmp_path, capsys, monkeypatch):
+    from thresy.runner import FakeRunner, cmdline
+
+    fake = FakeRunner(reply="ok")
+    monkeypatch.setattr(cmdline, "get_runner", lambda name, config: fake)
+    assert main(["run", "--runner", "fake", "--cwd", str(tmp_path), "--effort", "max", "x"]) == 0
+    assert fake.requests[0].effort == "max"
+
+
+def test_parse_effort():
+    import pytest
+
+    from thresy.runner import EFFORTS, parse_effort
+
+    assert [parse_effort(level.upper()) for level in EFFORTS] == list(EFFORTS)
+    assert parse_effort(None) is None and parse_effort("  ") is None
+    with pytest.raises(ValueError, match="expected one of low, medium, high, xhigh, max"):
+        parse_effort("ultra")
+
+
 def test_check_json(capsys):
     code = main(["check", "--runner", "fake", "--json"])
     payload = json.loads(capsys.readouterr().out)

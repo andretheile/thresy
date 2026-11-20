@@ -57,7 +57,10 @@ Script = Sequence[ScriptItem] | Callable[[RunRequest], Iterable[ScriptItem]]
 class FakeRunner:
     name = "fake"
     capabilities = RunnerCapabilities(
-        supports_resume=True, supports_streaming=True, supports_system_append=True
+        supports_resume=True,
+        supports_streaming=True,
+        supports_system_append=True,
+        supports_effort=True,  # recorded in `requests`, otherwise without effect
     )
 
     def __init__(

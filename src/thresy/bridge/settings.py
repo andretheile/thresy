@@ -12,6 +12,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 from thresy.config import SETTINGS_CONFIG
+from thresy.runner import Effort, parse_effort
 
 _HHMM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
@@ -109,6 +110,12 @@ class BridgeSettings(BaseSettings):
     bridge_run_timeout_s: float = 900
     bridge_chat_tier: ModelTier = "smart"
     bridge_proactive_tier: ModelTier = "smart"
+    bridge_chat_effort: Effort | None = None
+    """Reasoning effort of runs that answer the athlete (``low``, ``medium``, ``high``,
+    ``xhigh``, ``max``): someone is waiting on a phone. Unset: the harness's default."""
+    bridge_proactive_effort: Effort | None = None
+    """Reasoning effort of the briefing and the debrief, which nobody waits for. Unset: the
+    harness's default. A runner without an effort setting ignores both (docs/runners.md)."""
 
     bridge_context_messages: int = 20
     """When a fresh session starts: at most this many earlier messages from the log..."""
@@ -148,6 +155,11 @@ class BridgeSettings(BaseSettings):
     def _check_quiet(cls, value: str) -> str:
         QuietHours.parse(value)
         return value
+
+    @field_validator("bridge_chat_effort", "bridge_proactive_effort", mode="before")
+    @classmethod
+    def _check_effort(cls, value: object) -> object:
+        return parse_effort(value) if isinstance(value, str) else value
 
     @property
     def quiet_hours(self) -> QuietHours | None:

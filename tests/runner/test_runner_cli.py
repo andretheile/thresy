@@ -66,6 +66,20 @@ def test_run_reads_prompt_from_stdin(tmp_path):
     assert result.output.splitlines()[-1] == "aus stdin"
 
 
+def test_run_passes_the_effort_level(monkeypatch, tmp_path):
+    from thresy.runner import FakeRunner, cmdline
+
+    fake = FakeRunner(reply="ok")
+    monkeypatch.setattr(cmdline, "get_runner", lambda name, config: fake)
+    base = ["run", "--runner", "fake", "--cwd", str(tmp_path)]
+    result = invoke(runner_cli.app, [*base, "--effort", "xhigh", "x"])
+    assert result.exit_code == 0, result.output
+    result = invoke(runner_cli.app, [*base, "x"])
+    assert [r.effort for r in fake.requests] == ["xhigh", None]
+    bad = invoke(runner_cli.app, [*base, "--effort", "ultra", "x"])
+    assert bad.exit_code == 2 and len(fake.requests) == 2
+
+
 def test_config_reads_dotenv(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("COACH_RUNNER", raising=False)

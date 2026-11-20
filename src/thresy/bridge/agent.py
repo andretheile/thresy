@@ -23,7 +23,15 @@ from pathlib import Path
 from typing import Any
 
 from thresy.config import Settings
-from thresy.runner import AgentRunner, Final, RunHandle, RunRequest, RunResult, Started
+from thresy.runner import (
+    AgentRunner,
+    Effort,
+    Final,
+    RunHandle,
+    RunRequest,
+    RunResult,
+    Started,
+)
 from thresy.transport.base import Transport
 
 from . import prompts
@@ -86,6 +94,8 @@ class RunSpec:
     """Send the numbers-only briefing for this day if the run fails."""
     on_start: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
     on_done: list[Callable[[RunResult | None], Awaitable[None]]] = field(default_factory=list)
+    effort: Effort | None = None
+    """Reasoning effort for the runner; None: the harness's default."""
 
 
 @dataclass(frozen=True)
@@ -278,13 +288,16 @@ class AgentService:
             model_tier=spec.tier,
             timeout_s=self.bs.bridge_run_timeout_s,
             env=self.agent_env(run_id),
+            effort=spec.effort,
         )
         log.info(
-            "run %s (%s) for chat %s: %s session",
+            "run %s (%s) for chat %s: %s session, tier %s, effort %s",
             run_id,
             spec.trigger,
             spec.chat_id,
             "resumed" if resume else "fresh",
+            spec.tier,
+            spec.effort or "default",
         )
         stored = resume
         result: RunResult | None = None

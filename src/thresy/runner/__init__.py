@@ -13,8 +13,10 @@ harness. Standard library only. See docs/runners.md.
 
 from .config import RUNNER_NAMES, HarnessConfig, RunnerConfig
 from .core import (
+    EFFORTS,
     ERROR_KINDS,
     AgentRunner,
+    Effort,
     ErrorKind,
     Final,
     Health,
@@ -25,16 +27,19 @@ from .core import (
     RunRequest,
     RunResult,
     Started,
+    parse_effort,
 )
 from .fake import Delay, Fail, FakeRunner
 from .handle import RunHandle
 from .registry import get_runner
 
 __all__ = [
+    "EFFORTS",
     "ERROR_KINDS",
     "RUNNER_NAMES",
     "AgentRunner",
     "Delay",
+    "Effort",
     "ErrorKind",
     "Fail",
     "FakeRunner",
@@ -51,4 +56,5 @@ __all__ = [
     "RunnerConfig",
     "Started",
     "get_runner",
+    "parse_effort",
 ]

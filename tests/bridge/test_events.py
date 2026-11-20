@@ -91,6 +91,26 @@ def test_sleep_arrived_today_starts_one_briefing_per_day(make_harness) -> None:
     asyncio.run(scenario())
 
 
+def test_effort_follows_the_kind_of_run(make_harness) -> None:
+    async def scenario() -> None:
+        bridge = {"bridge_chat_effort": "medium", "bridge_proactive_effort": "MAX"}
+        async with make_harness(briefing_runner(), bridge=bridge) as h:
+            add_sleep(h, "2030-01-02", end=local(2030, 1, 2, 6, 40))
+            add_event(h, "sleep_arrived", {"wake_date": "2030-01-02"})
+            await h.tick()
+            await h.say("and what about today?")
+            await h.settle()
+            add_run(h, 5001, local(2030, 1, 2, 7, 0))
+            add_event(h, "new_activity", {"activity_id": 5001, "type": "running", "is_run": True})
+            await h.tick()
+            h.clock.advance(200)
+            await h.tick()
+            assert runs(h) == ["morning_briefing", "user_message", "post_run"]
+            assert [r.effort for r in h.runner.requests] == ["max", "medium", "max"]
+
+    asyncio.run(scenario())
+
+
 def test_playbook_is_named_when_the_workspace_has_it(make_harness) -> None:
     async def scenario() -> None:
         async with make_harness(briefing_runner(), start=False) as h:

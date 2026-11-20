@@ -139,3 +139,15 @@ def test_quiet_hours_parsing() -> None:
         BridgeSettings(_env_file=None, bridge_quiet_hours="25:00-06:00")
     with pytest.raises(ValueError):
         BridgeSettings(_env_file=None, bridge_briefing_fallback="10h")
+
+
+def test_effort_settings(monkeypatch) -> None:
+    defaults = BridgeSettings(_env_file=None)
+    assert defaults.bridge_chat_effort is None and defaults.bridge_proactive_effort is None
+    monkeypatch.setenv("COACH_BRIDGE_CHAT_EFFORT", " High ")
+    monkeypatch.setenv("COACH_BRIDGE_PROACTIVE_EFFORT", "")  # as copied from .env.example
+    settings = BridgeSettings(_env_file=None)
+    assert settings.bridge_chat_effort == "high" and settings.bridge_proactive_effort is None
+    monkeypatch.setenv("COACH_BRIDGE_PROACTIVE_EFFORT", "ultra")
+    with pytest.raises(ValueError, match="expected one of low, medium, high, xhigh, max"):
+        BridgeSettings(_env_file=None)

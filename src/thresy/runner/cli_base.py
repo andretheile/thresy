@@ -9,10 +9,11 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -22,6 +23,7 @@ from .core import (
     ErrorKind,
     Health,
     ModelTier,
+    Progress,
     RunEvent,
     RunnerCapabilities,
     RunRequest,
@@ -37,6 +39,8 @@ log = logging.getLogger(__name__)
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 _VERSION_RE = re.compile(r"\d+\.\d+(\.\d+)?([-+.\w]*)?")
 MAX_DETAIL = 2000
+RETRY_WITHOUT_EFFORT: tuple[ErrorKind, ...] = ("other", "crash")
+"""A run with an effort level that fails like this before any output is tried once without."""
 
 
 @dataclass(frozen=True)
@@ -277,25 +281,67 @@ class CliRunner(ABC):
 
     async def _drive(self, req: RunRequest, ctx: RunContext) -> RunResult:
         model = self.model_for(req.model_tier)
-        parser = self.new_parser(req, model)
+        if req.effort is not None and not self.capabilities.supports_effort:
+            log.debug("%s: no effort setting in this CLI; ignoring %s", self.name, req.effort)
+            req = replace(req, effort=None)
         cwd = Path(req.cwd)
         if not cwd.is_dir():
-            return parser.error("other", f"working directory does not exist: {cwd}")
+            return self.new_parser(req, model).error(
+                "other", f"working directory does not exist: {cwd}"
+            )
         env = self.child_env(req)
         binary = self.resolve_binary(env)
         if binary is None:
-            return parser.error(
+            return self.new_parser(req, model).error(
                 "other", f"{self.name} CLI not found (looked for {self.binary_names()})"
             )
+        clock = time.monotonic()
+        result, progressed = await self._attempt(req, ctx, binary, model, env)
+        if (
+            req.effort is None
+            or result.ok
+            or progressed
+            or result.error_kind not in RETRY_WITHOUT_EFFORT
+            or ctx.cancel_event.is_set()
+        ):
+            return result
+        # A CLI too old for the level, or a model that rejects it instead of lowering it, must
+        # not cost the answer: the run did nothing yet, so try once more at the default.
+        remaining = req.timeout_s - (time.monotonic() - clock)
+        if remaining <= 0:
+            return result
+        log.warning(
+            "%s: the run at effort %s failed before any output (%s: %s); retrying once "
+            "without an effort setting",
+            self.name,
+            req.effort,
+            result.error_kind,
+            truncate(result.error_detail or "", 300),
+        )
+        retry = replace(req, effort=None, timeout_s=remaining)
+        result, _ = await self._attempt(retry, ctx, binary, model, env)
+        return result
+
+    async def _attempt(
+        self,
+        req: RunRequest,
+        ctx: RunContext,
+        binary: str,
+        model: str | None,
+        env: Mapping[str, str],
+    ) -> tuple[RunResult, bool]:
+        """One start of the CLI; returns the result and whether any Progress was emitted."""
+        parser = self.new_parser(req, model)
+        progressed = False
         try:
             inv = self.build_invocation(req, binary, model)
         except OSError as exc:
-            return parser.error("other", f"could not prepare the {self.name} run: {exc}")
+            return parser.error("other", f"could not prepare the {self.name} run: {exc}"), False
         try:
-            log.debug("%s: starting %s in %s", self.name, inv.argv[0], cwd)
+            log.debug("%s: starting %s in %s", self.name, inv.argv[0], req.cwd)
             child = ChildProcess(
                 inv.argv,
-                cwd=cwd,
+                cwd=Path(req.cwd),
                 env=env,
                 stdin_data=inv.stdin,
                 grace_s=self.kill_grace_s,
@@ -307,11 +353,12 @@ class CliRunner(ABC):
                     async with contextlib.aclosing(lines):
                         async for line in lines:
                             for event in parser.feed_line(line):
+                                progressed = progressed or isinstance(event, Progress)
                                 ctx.emit(event)  # type: ignore[arg-type]
                             if parser.terminal_seen:
                                 child.expect_exit(self.config.exit_wait_s)
             except SpawnError as exc:
-                return parser.error("other", f"could not start {self.name} CLI: {exc}")
+                return parser.error("other", f"could not start {self.name} CLI: {exc}"), False
         finally:
             inv.cleanup()
         assert child.exit is not None
@@ -324,7 +371,7 @@ class CliRunner(ABC):
             )
         elif child.exit.group_cleanup:
             log.info("%s: stopped processes left behind by the CLI", self.name)
-        return parser.finish(child.exit)
+        return parser.finish(child.exit), progressed
 
     # -- health ----------------------------------------------------------------------
 

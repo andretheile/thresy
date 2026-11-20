@@ -13,9 +13,11 @@ Command line (working directory = RunRequest.cwd; also passed as --workspace):
           -- <prompt>
 
 The CLI has no option for extra system instructions, so RunRequest.system_append
-is prepended to the prompt. Its documentation describes no memory feature of its
-own, so there is nothing to turn off (the coach's memory is the workspace's
-memory/ files).
+is prepended to the prompt. Nor does it document a reasoning-effort option (the
+level is part of some model names, set through COACH_CURSOR_MODEL_*), so
+RunRequest.effort is ignored (supports_effort=False). Its documentation describes
+no memory feature of its own, so there is nothing to turn off (the coach's memory
+is the workspace's memory/ files).
 
 WARNING: the documentation offers no stdin or file route for the prompt, so the
 prompt (with any system_append) is a command-line argument and visible to every
@@ -96,7 +98,10 @@ class CursorStreamParser(StreamParser):
 class CursorRunner(CliRunner):
     name = "cursor"
     capabilities = RunnerCapabilities(
-        supports_resume=True, supports_streaming=True, supports_system_append=False
+        supports_resume=True,
+        supports_streaming=True,
+        supports_system_append=False,
+        supports_effort=False,
     )
     default_binaries = ("agent", "cursor-agent")
     default_models: Mapping[str, str | None] = {}  # the CLI's default
