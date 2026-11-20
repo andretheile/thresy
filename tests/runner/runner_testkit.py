@@ -70,10 +70,11 @@ _FAKE_CLI = """\
 import json, os, signal, subprocess, sys, time
 
 spec = json.loads(os.environ["FAKE_CLI_SPEC"])
-if spec.get("ignore_sigint"):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-if spec.get("ignore_sigterm"):
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+# Both set either way: ignored signals are inherited, and a test run started in the background
+# of a non-interactive shell (`pytest &`) ignores SIGINT, which would make every fake CLI ignore
+# it too. SIG_DFL ends the process at once, like a CLI that stops cleanly on SIGINT.
+signal.signal(signal.SIGINT, signal.SIG_IGN if spec.get("ignore_sigint") else signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_IGN if spec.get("ignore_sigterm") else signal.SIG_DFL)
 record = spec.get("record")
 if record:
     data = {{
