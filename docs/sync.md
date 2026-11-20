@@ -21,6 +21,8 @@ What it fixes compared with the old once-a-day bot:
 
 Exit codes: 0 success, 1 failure, 3 not finished yet (a login waiting for its verification code, or `request --wait` timing out while the request is still pending).
 
+On a database that has not been migrated (a missing table or column), the commands that use it stop with one line instead of a traceback: ``error: database is not migrated (relation "agent_requests" does not exist); run `coach db migrate` ``.
+
 ## One pass
 
 1. **Activities.** List the activities of the last `COACH_SYNC_LOOKBACK_DAYS` local days and upsert each (`source = 'garmin'`). For every listed activity that has neither records nor a stored file, download the original, extract the FIT file, save it as `fit/<YYYY>/<activity_id>.fit` under `COACH_DATA_DIR` (`YYYY` = year of the local start) and store records and laps. A download that fails is retried on later passes, at most `COACH_SYNC_FIT_MAX_ATTEMPTS` times; an activity without a file (HTTP 404, e.g. manual entries) or with an unusable file is not retried. A FIT file that cannot be parsed is kept (`fit_path` set, `has_records` false) so it can be parsed again later.

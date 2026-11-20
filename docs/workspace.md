@@ -165,5 +165,5 @@ From six real runs with Claude Code 2.1.327 (Sonnet tier) against the dev databa
   agent sees the developer's skills, MCP servers and account e-mail. The deployment's separate
   agent home avoids this.
 - **The dev database lacked migration `0003_agent_requests`**, so `coach sync status` and
-  `coach sync request` crashed with a traceback in the trials; the coach coped, but
-  `coach sync status` could report a missing table more gracefully.
+  `coach sync request` crashed with a traceback in the trials; the coach coped. They now say in
+  one line that the database is not migrated and to run `coach db migrate`.
