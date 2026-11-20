@@ -259,7 +259,7 @@ def record_failure(config: BackupConfig, error: str, *, notify: bool = True) -> 
         log.exception("could not record the backup failure in the database")
 
 
-# -- the parts --------------------------------------------------------------------------------
+# -- the parts ------------------------------------------------------------------------------------
 
 
 def _sha256(path: Path) -> str:
@@ -386,7 +386,7 @@ def _upload_fit(
                 _save_fit_state(conn, config, done)
 
 
-# -- run ----------------------------------------------------------------------------------------
+# -- run ------------------------------------------------------------------------------------------
 
 
 def new_run_id(now: datetime | None = None) -> str:
