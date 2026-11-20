@@ -92,14 +92,17 @@ How much disk it takes, measured on the first deployment, a consistent amateur r
 
 | | |
 |---|---|
-| History | 6 years, about 780 runs and 8,700 km (between 650 and 2,400 km a year) |
-| With per-second data | 473 runs, 492 hours, 1.8 million samples |
-| Database | 246 MB, almost all of it the per-second samples |
-| Original FIT files | 156 MB |
-| Import of that history from files | 7 minutes on a small server |
+| History | 6 years, about 780 runs and 8,700 km (between 650 and 2,400 km a year), plus about 340 other activities |
+| Recorded samples | 1,040 activities, about 1,030 hours, 2.9 million samples |
+| Sleep and HRV | 2,150 days, with HRV for the 1,400 most recent nights |
+| Database | 400 MB, almost all of it the recorded samples |
+| Original FIT files | 243 MB |
+| Fetching all of it from Garmin | about four hours and 7,000 requests, slow on purpose |
+| Importing three years of it from files instead | 7 minutes on a small server |
 
-As a rule of thumb, 1,000 km of running with per-second data is about 40 MB of database and
-30 MB of original files, so a decade of training fits in a few gigabytes including backups.
+As a rule of thumb, 1,000 km of running recorded every second is about 40 MB of database and
+30 MB of original files (older watches that record less often need less), so a decade of
+training fits in a few gigabytes including backups.
 Memory is the tighter constraint: the four services used about 0.5 GB while idle on that
 deployment, and more while the agent works; [docs/deploy.md](docs/deploy.md) lists the limits.
 
