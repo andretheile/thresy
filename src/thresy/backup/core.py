@@ -467,6 +467,8 @@ def run_backup(
         problems = result.errors[:3]
         if result.restore_check is not None and not result.restore_check.ok:
             problems.append(f"restore check failed: {result.restore_check.detail}")
+            with contextlib.suppress(Exception), db.connect(config.database_url) as conn:
+                _update_status(conn, restore_check=_check_state(result.restore_check, _now()))
         message = "; ".join(problems)
         record_failure(config, message)
         raise BackupError(message)
