@@ -11,6 +11,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch: # run it by hand on any branch (Actions tab, "Run workflow")
 
 permissions:
   contents: read
