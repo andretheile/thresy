@@ -76,6 +76,16 @@ requests (a typical cloud coding sandbox) therefore cannot host Thresy by itself
 as the agent in front of a persistent Thresy elsewhere, which would need a network interface
 to the `coach` commands that does not exist yet.
 
+Persistence does not have to mean one machine. The same three things could live in managed
+services instead, for example a hosted Postgres such as Google Cloud SQL plus an object-storage
+bucket, and then the compute becomes replaceable: the sync could run as a scheduled container,
+and the agent could be anything with a shell and the `coach` commands, including an agentic IDE
+such as Google's Antigravity or a command-line agent such as Gemini CLI. Thresy is part of the
+way there (one Postgres as the single store, backups already go to a bucket) but not all of it:
+the original FIT files, the Garmin session token and the coach's workspace are still files on a
+local disk, the sync is a long-running process, and there is no runner adapter for a Google
+agent yet. Nobody has built or tried this variant; it is noted here as a direction.
+
 How much disk it takes, measured on the first deployment, a consistent amateur runner:
 
 | | |
