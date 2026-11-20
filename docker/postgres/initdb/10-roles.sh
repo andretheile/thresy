@@ -3,7 +3,8 @@
 # first time (scripts in /docker-entrypoint-initdb.d run only on an empty data directory).
 #
 #   coach_app    read/write, owns the database and therefore the schema objects created by
-#                `coach db migrate`; used by the services
+#                `coach db migrate`; used by the services. CREATEDB lets the backup's restore
+#                check create (and drop) its scratch database (docs/backup.md).
 #   coach_agent  the agent's own `coach` commands: SELECT everywhere, a few writes
 #                (grants are in migrations/0002_agent_role.sql)
 #   coach_ro     SELECT only (grants are in migrations/0001_init.sql), for `coach sql`; its
@@ -35,6 +36,7 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'coach_agent') \gexec
 SELECT format('CREATE ROLE coach_ro LOGIN PASSWORD %L', :'ro_password')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'coach_ro') \gexec
 
+ALTER ROLE coach_app CREATEDB;
 ALTER ROLE coach_ro SET default_transaction_read_only = on;
 ALTER ROLE coach_ro SET statement_timeout = '30s';
 

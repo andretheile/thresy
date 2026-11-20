@@ -1,5 +1,5 @@
 # Build context for docker/Dockerfile: only what the image needs. In particular legacy/,
-# private/, .env and local virtual environments must never reach the build.
+# private/, secrets/, .env and local virtual environments must never reach the build.
 *
 !pyproject.toml
 !uv.lock
@@ -8,6 +8,13 @@
 !LICENSE
 !src/
 !migrations/
+!workspace/
 !docker/install-agent.sh
+!docker/install-pg-client.sh
+!docker/setup-users.sh
+!docker/run-as-agent.c
+!docker/build-run-as-agent.sh
+!docker/bridge-start.sh
 **/__pycache__
 **/*.pyc
+**/.DS_Store
