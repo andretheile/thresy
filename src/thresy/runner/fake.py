@@ -21,6 +21,7 @@ import asyncio
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from .core import (
     ErrorKind,
@@ -76,6 +77,7 @@ class FakeRunner:
         cost_usd: float | None = None,
         usage: dict | None = None,
         health: Health | None = None,
+        credential_expires_at: datetime | None = None,
     ) -> None:
         self.script = script
         self.delay_s = delay_s
@@ -86,6 +88,8 @@ class FakeRunner:
         self.model = model
         self.cost_usd = cost_usd
         self.usage = usage
+        self.credential_expires_at = credential_expires_at
+        """Reported with every result, like a harness that knows when its login ends."""
         self.requests: list[RunRequest] = []
         self._health = health or Health(
             runner=self.name,
@@ -135,6 +139,7 @@ class FakeRunner:
                 duration_s=0.0,
                 runner=self.name,
                 model=self.model,
+                credential_expires_at=self.credential_expires_at,
             )
 
         def cancelled() -> RunResult:

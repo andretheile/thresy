@@ -16,6 +16,8 @@
   are merged into one debrief.
 * ``garmin_auth_required``, ``sync_failed`` and ``backup_failed`` become plain notifications
   (no agent run), rate-limited per kind; sync failures only after a threshold.
+* No event but checked on every tick: a notice when the agent's model credential is about to
+  expire (thresy.bridge.credential).
 * During quiet hours proactive messages wait until the window ends.
 
 An event is marked processed when it is handled (or deliberately skipped, with the reason in
@@ -43,6 +45,7 @@ from thresy.runner import RunResult
 from . import prompts
 from .chat import Job
 from .clock import Clock
+from .credential import CredentialWatch
 from .repo import Repo, Row
 from .settings import BridgeSettings
 from .texts import t
@@ -85,6 +88,7 @@ class EventDispatcher:
         default_chat: Callable[[], str | None],
         enqueue: Callable[[str, Job], None],
         notify: Callable[[str, str], Awaitable[None]],
+        credential: CredentialWatch | None = None,
     ) -> None:
         self.repo = repo
         self.settings = settings
@@ -94,6 +98,8 @@ class EventDispatcher:
         self.default_chat = default_chat
         self.enqueue = enqueue
         self.notify = notify
+        self.credential = credential
+        """Checked on every tick: is a notice about the credential's end due?"""
         self.claimed: set[int] = set()
         self.briefing: PendingBriefing | None = None
         self.debrief: PendingDebrief | None = None
@@ -133,6 +139,11 @@ class EventDispatcher:
         await self._check_night(now)
         if not quiet:
             await self._release(now, local)
+        if self.credential is not None:
+            try:
+                await self.credential.check(now, quiet=quiet)
+            except Exception:
+                log.exception("credential check failed")
 
     async def _mark(self, ids: list[int], outcome: str) -> None:
         await self.repo.mark_events(ids, PROCESSED_BY.format(outcome=outcome))

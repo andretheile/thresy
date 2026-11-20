@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,30 @@ def test_invalid_token_real_capture_is_auth(tmp_path):
     assert "error=authentication_failed" in result.error_detail
     assert result.text == ""  # the API error message is not agent output
     assert result.cost_usd == 0
+    assert result.credential_expires_at is None
+
+
+def test_credential_end_is_passed_on_when_the_cli_names_it(tmp_path, caplog):
+    # The capture was made with a stored claude.ai login, whose result names its end.
+    lines = fixture_lines("claude/claude_new_session.jsonl")
+    _, result = parse(parser(tmp_path), lines)
+    assert result.credential_expires_at == datetime(2030, 1, 1, tzinfo=UTC)
+    # A token from the environment (setup-token), an API key, another provider: no such field.
+    final = json.loads(lines[-1])
+    assert final["type"] == "result"
+    del final["credential_expires_at"]
+    _, result = parse(parser(tmp_path), [*lines[:-1], json.dumps(final)])
+    assert result.ok and result.credential_expires_at is None
+    final["credential_expires_at"] = "soon"
+    _, result = parse(parser(tmp_path), [*lines[:-1], json.dumps(final)])
+    assert result.ok and result.credential_expires_at is None
+    # Close to the end, the adapter also logs it.
+    soon = datetime.now(UTC) + timedelta(days=1)
+    final["credential_expires_at"] = soon.isoformat().replace("+00:00", "Z")
+    _, result = parse(parser(tmp_path), [*lines[:-1], json.dumps(final)])
+    assert result.credential_expires_at is not None
+    assert abs(result.credential_expires_at - soon) < timedelta(seconds=1)
+    assert "the login expires at" in caplog.text
 
 
 @pytest.mark.parametrize(

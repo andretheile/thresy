@@ -195,11 +195,39 @@ login notice (the login is the cause). The sync raises `sync_failed` only after 
 passes in a row, so `COACH_BRIDGE_SYNC_FAILED_THRESHOLD` defaults to 1; the notice names the
 last successful sync from the sync's `sync_status` record.
 
+### Before the model credential expires
+
+The agent reaches its model with a credential that ends at some point (a Claude Code token from
+`claude setup-token` after one year). When it has ended, every run fails with the `auth`
+message. To tell the athlete in good time, the bridge keeps the end date
+(`thresy.bridge.credential`):
+
+- **From the runner.** A harness that knows when its credential ends reports it with each run
+  (`RunResult.credential_expires_at`, docs/runners.md). The bridge remembers the latest date in
+  `sync_state` (`bridge:credential`). A successful run that reports no date means the
+  credential in use has none known (for example after switching from a stored login to a
+  token), and the remembered date is dropped; a failed run changes nothing.
+- **From the setting** `COACH_BRIDGE_CREDENTIAL_EXPIRES`, for a credential whose harness does not
+  report its end. Claude Code reports it only for a stored claude.ai login, not for a token in
+  `CLAUDE_CODE_OAUTH_TOKEN` (which is what docs/deploy.md sets up), nor for API keys; Codex and
+  Cursor report none. Set it to the date a year after creating the token (`2027-11-20` means
+  the start of that day in `COACH_TZ`), and update it when you renew the token. A date reported
+  by the runner wins over the setting.
+
+From `COACH_BRIDGE_CREDENTIAL_WARN_DAYS` (21) days before the end, a plain message goes to the
+default chat, without an agent run: what expires, when, and that the owner renews it following
+docs/deploy.md, section "The model credential" (when the date comes from the setting, also that
+the setting needs the new date). It repeats at most once a week and comes once more within two
+days of the end: with the default, 21, 14, 7 and 2 days before. A notice that falls into quiet
+hours waits for their end. When the last one went out is kept in `bridge:notified:credential`,
+so a restart repeats nothing; a new end date starts afresh. After the end nothing more is sent.
+`/status` shows the known end date. `0` turns the notices off.
+
 ## Chat commands
 
 | Command | Does |
 |---|---|
-| `/status` | last successful sync and failures in a row (from the sync's `sync_status`), Garmin login state if not ok, newest stored activity and night, runner health (`healthcheck`, no model usage), today's agent runs and cost, waiting and failed outbox rows, whether a run is in progress, quiet hours |
+| `/status` | last successful sync and failures in a row (from the sync's `sync_status`), Garmin login state if not ok, newest stored activity and night, runner health (`healthcheck`, no model usage), until when the agent's login is valid (if known, see above), today's agent runs and cost, waiting and failed outbox rows, whether a run is in progress, quiet hours |
 | `/sync` | inserts an `agent_requests` row (`sync_now`), keeps "typing" on while the sync service works, then reports new activities and whether last night's sleep is synced; gives up after `COACH_BRIDGE_SYNC_REQUEST_TIMEOUT_S` |
 | `/new` | closes today's session; the next message starts a fresh one without earlier context |
 | `/help`, `/start` | lists the commands |
@@ -276,6 +304,8 @@ belongs to `coach weather`, `thresy.tools.weather.WeatherSettings`). The bridge'
 | `COACH_BRIDGE_NOTIFY_INTERVAL_H` | `12` | one notification per kind per interval |
 | `COACH_BRIDGE_SYNC_FAILED_THRESHOLD` | `1` | `sync_failed` events needed within the window |
 | `COACH_BRIDGE_SYNC_FAILED_WINDOW_H` | `6` | |
+| `COACH_BRIDGE_CREDENTIAL_WARN_DAYS` | `21` | tell the athlete this many days before the model credential expires; `0`: never |
+| `COACH_BRIDGE_CREDENTIAL_EXPIRES` | unset | end of a credential whose harness does not report it: `2027-11-20` or an ISO 8601 time |
 | `COACH_BRIDGE_RUN_TIMEOUT_S` | `900` | per agent run |
 | `COACH_BRIDGE_CHAT_TIER` / `COACH_BRIDGE_PROACTIVE_TIER` | `smart` / `smart` | model tier |
 | `COACH_BRIDGE_CHAT_EFFORT` / `COACH_BRIDGE_PROACTIVE_EFFORT` | unset / unset | reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`; unset: the harness's default (below) |
@@ -384,6 +414,9 @@ No real Telegram bot and no real agent CLI were available while this was built.
   `COACH_BRIDGE_PROACTIVE_EFFORT` reach the runner per kind of run is tested with the fake
   runner; that Claude Code applies them was not checked with a real run (docs/runners.md,
   "Checking the effort level", says how).
+- **Credential expiry:** the notices are tested with the fake runner and the injected clock.
+  What a real Claude Code run reports was taken from its documentation (docs/runners.md,
+  "Credential expiry"), and the only real capture with the field came from a stored login.
 - **Process behaviour:** SIGTERM handling of `coach bridge run` inside the container and the
   timing against Docker's stop timeout were not exercised end to end.
 - **Security:** in the container the agent runs as its own Unix user (`COACH_AGENT_USER`,

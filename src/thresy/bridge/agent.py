@@ -37,6 +37,7 @@ from thresy.transport.base import Transport
 from . import prompts
 from .briefing import numbers_briefing
 from .clock import Clock
+from .credential import CredentialWatch
 from .repo import Repo
 from .settings import BridgeSettings, ModelTier
 from .texts import t
@@ -142,6 +143,7 @@ class AgentService:
         busy: BusyTracker,
         prompt_env: prompts.PromptEnv,
         wake_outbox: Callable[[], None],
+        credential: CredentialWatch | None = None,
     ) -> None:
         self.repo = repo
         self.runner = runner
@@ -151,6 +153,8 @@ class AgentService:
         self.busy = busy
         self.prompt_env = prompt_env
         self.wake_outbox = wake_outbox
+        self.credential = credential
+        """Told what each run reports about the credential's end."""
         self.handles: dict[str, RunHandle] = {}
         self.stopping = False
 
@@ -354,6 +358,11 @@ class AgentService:
             error_detail=result.error_detail,
         )
         await self.repo.touch_session(session["id"])
+        if self.credential is not None:
+            try:
+                await self.credential.observe(result)
+            except Exception:  # never at the cost of the answer
+                log.exception("could not record the credential's end")
         log.info(
             "run %s finished: %s%s",
             run_id,
