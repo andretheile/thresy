@@ -88,6 +88,10 @@ class OutboundItem:
     text: str | None = None
     """Message text (``text``, ``choice``) or caption (``photo``, ``document``)."""
     file_path: Path | None = None
+    """Where the file was (its name is the file name in the chat; for the log)."""
+    data: bytes | None = None
+    """The file's content, read once by the bridge (see :mod:`thresy.transport.files`).
+    Transports send this and never open ``file_path``: the agent can replace that path."""
     options: tuple[str, ...] = ()
     """Button labels of a ``choice``."""
     ref: str | None = None

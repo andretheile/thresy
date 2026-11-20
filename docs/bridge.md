@@ -7,7 +7,7 @@ queues with `coach send`.
 
 | Package | Role |
 |---|---|
-| `thresy.transport` | `Transport` protocol, message types, `FakeTransport` for tests |
+| `thresy.transport` | `Transport` protocol, message types, `FakeTransport` for tests, reading and writing files in directories the agent controls (`files`) |
 | `thresy.transport.telegram` | Telegram (python-telegram-bot, long polling); the only code that knows Telegram |
 | `thresy.bridge` | chat loop, sessions, agent runs, outbox delivery, event dispatcher, chat commands |
 | `thresy.tools` | `coach send …` and `coach sql`, run by the agent |
@@ -198,8 +198,22 @@ last successful sync from the sync's `sync_status` record.
 - Delivered rows are never sent again; a crash between the transport accepting a message and
   the database commit (milliseconds) would resend that one row after the restart.
 - Rows are checked again before delivery because the agent can also insert them with plain
-  SQL: known kind, non-empty text, valid options, files resolving (symlinks included) to a
-  regular file under `<workspace>/out/`, and an allow-listed chat.
+  SQL: known kind, non-empty text, valid options, an allow-listed chat, and a file path under
+  `<workspace>/out/` (absolute, or relative to the workspace; no `..`).
+- **Files are read once, by the bridge**, and the transport sends those bytes
+  (`OutboundItem.data`); it never opens the path. The agent can replace anything under `out/`
+  at any moment, also between `coach send`'s check and the delivery, so the bridge
+  (`thresy.transport.files`) opens `out` and then each path component relative to the one
+  before with `O_NOFOLLOW`: a link anywhere on the way (`out` itself, a parent directory, the
+  file) is refused, never followed. It then checks the open file: a regular file with one name
+  (no hard link), not empty, within the limit (photos 10 MB, documents 50 MB, also while
+  reading), and, where the kernel tells an open file's path (Linux `/proc/self/fd`, macOS
+  `F_GETPATH`), still inside `out/`. A refused file is a permanent failure with the reason in
+  `outbox.error` ("refused: out/plot.png is a symbolic link; files are never read through
+  links").
+- Files the athlete sends are written the same way under `inbox/<date>/`: directories and the
+  file are created without following links, and an existing name (a planted link included) is
+  never written to; a second copy gets a number (`10-2-photo.jpg`).
 - A pressed button comes back as an inbound `choice_answer` message ("Pressed the button
   "Rest", answering your question: "…"") and starts a run like any message; a second press of
   the same question is ignored.
@@ -303,7 +317,9 @@ replaced by one "✓ <label>" button.
    as `Attachment`s; button presses as `kind="choice_answer"` with `reply_to` = the item's
    `ref`). Drop chats that are not allow-listed before calling `on_message`.
 3. Render `OutboundItem.text` (Markdown) the way the medium needs; deliver `choice` options so
-   that a press comes back with the `ref`.
+   that a press comes back with the `ref`. Send files from `OutboundItem.data` and never open
+   `file_path` (the agent may have replaced it); save incoming files with
+   `thresy.transport.files.create_file_under`.
 4. Select it in `thresy.bridge.main.build_transport` with a new `COACH_BRIDGE_TRANSPORT`
    value. Nothing in `thresy.bridge` needs to know about it otherwise; test it like
    `tests/transport/test_telegram.py` and use `FakeTransport` for bridge tests.
@@ -338,8 +354,7 @@ No real Telegram bot and no real agent CLI were available while this was built.
   docs/runners.md "The agent's own Unix user"), so it cannot read the bridge's or PID 1's
   environment through `/proc`; `coach runner check --isolation` checks this on the server.
   Without that setting (local development) the agent runs as the bridge's user and the
-  environment allow-list is not a boundary against a determined agent. One gap remains in the
-  outbox: a file under `out/` is checked (resolved, regular, inside `out/`) before delivery and
-  read again by path when it is sent, so an agent that swaps it for a symlink in between could
-  make the bridge send a file the bridge can read; opening it once with `O_NOFOLLOW`, checking
-  the open file and sending that would close it.
+  environment allow-list is not a boundary against a determined agent. The outbox and inbox
+  file handling (see Outbox delivery) is tested on macOS with links swapped in after
+  `coach send`; its Linux-only part, locating the open file through `/proc/self/fd`, was not
+  run on Linux here.
