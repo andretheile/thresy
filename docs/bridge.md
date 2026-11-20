@@ -343,7 +343,7 @@ No real Telegram bot and no real agent CLI were available while this was built.
 - **Telegram, never run against the API:** `TelegramTransport.start/stop` (Application
   lifecycle, `start_polling`, bootstrap retries), real update parsing of photos, documents,
   voice and callback queries (tested with `Update.de_json` on synthetic payloads), file
-  download (`get_file` + `download_to_drive`), `send_message` with entities and
+  download (`get_file` + `download_as_bytearray`), `send_message` with entities and
   `LinkPreviewOptions`, `send_photo`/`send_document` with bytes and `filename`, inline
   keyboards and `edit_message_reply_markup`, `send_chat_action`, flood control, and which
   errors Telegram returns for which problem (the permanent/transient mapping is by exception
