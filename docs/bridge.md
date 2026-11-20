@@ -23,7 +23,11 @@ queues with `coach send`.
    at once, even while the agent is working. Other words starting with `/` go to the agent.
 4. Everything else goes to the chat's worker. **One agent run at a time per chat:** messages
    that arrive while a run is in progress are collected and handed to the next run together
-   ("The athlete sent 2 messages … while you were busy; answer them together").
+   ("The athlete sent 2 messages … while you were busy; answer them together"). A run takes
+   its messages when its prompt is built, not when the worker wakes up: everything waiting by
+   then goes to that run, including a message the bridge is still logging. So messages that
+   queued at Telegram while the bridge was down, and arrive one after another when it starts,
+   get one run and one answer (commands among them are still answered at once, without one).
 5. The worker finds or creates the chat's session (below), records the run in `agent_runs`
    (status `running`), links the messages to it, shows "typing" and starts the agent in the
    workspace with a short prompt and an explicit environment.
@@ -50,8 +54,9 @@ and local day (`COACH_TZ`) in `agent_sessions`:
   after a failed resume. Its prompt then begins with recent messages from `messages`: at most
   `COACH_BRIDGE_CONTEXT_MESSAGES` messages and `COACH_BRIDGE_CONTEXT_CHARS` characters, none
   older than `COACH_BRIDGE_CONTEXT_HOURS`, never the bridge's own command replies and
-  notifications, and after `/new` nothing from before the command (the cut is remembered by
-  message id in `sync_state` key `bridge:reset:<chat>`).
+  notifications, never the messages the run answers or messages waiting for a later run (the
+  agent sees each message once, as a message to answer), and after `/new` nothing from before
+  the command (the cut is remembered by message id in `sync_state` key `bridge:reset:<chat>`).
 - A resumed run that fails with `other` or `crash` before it queued anything is retried once in
   a fresh session (with context from the log); the old session is marked `failed`.
 
