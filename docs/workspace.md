@@ -156,10 +156,9 @@ From six real runs with Claude Code 2.1.327 (Sonnet tier) against the dev databa
 - **Workspace location:** `CLAUDE.md` is not loaded when the working directory is under `/tmp`.
   The workspace volume must be mounted elsewhere; `compose.yml` currently mounts it at
   `/workspace`, which is fine.
-- **Harness memory:** in `-p` mode Claude Code's auto-memory is active and its system prompt
-  tells the model to keep a `MEMORY.md` under `~/.claude/projects/…`. The brief tells the coach
-  not to use it, but the runner should switch it off for the agent's home (harness configuration
-  belongs to `thresy.runner` and the image).
+- **Harness memory:** in `-p` mode Claude Code's auto-memory was active and its system prompt
+  told the model to keep a `MEMORY.md` under `~/.claude/projects/…`. The runner now switches it
+  off on every run (docs/runners.md, "No memory of the harness's own").
 - **The operator's own configuration leaks into local trials:** with the developer's `HOME`, the
   agent sees the developer's skills, MCP servers and account e-mail. The deployment's separate
   agent home avoids this.

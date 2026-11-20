@@ -12,6 +12,9 @@ No personal text is on the command line: the prompt goes to stdin and
 RunRequest.system_append to a file only this user can read, removed after the
 run. `--bare` is never passed: bare mode ignores CLAUDE_CODE_OAUTH_TOKEN, which
 is how this deployment reaches the model through a subscription.
+
+Auto memory is off on every run (CLAUDE_CODE_DISABLE_AUTO_MEMORY=1): the
+coach's memory is the workspace's memory/ files, which every harness sees.
 """
 
 from __future__ import annotations
@@ -242,9 +245,14 @@ class ClaudeRunner(CliRunner):
         "--permission-prompts",
         "none",
     )
-    # Startup failures then also end with a structured result message.
     base_env: ClassVar[Mapping[str, str]] = MappingProxyType(
-        {"CLAUDE_CODE_STARTUP_FAILURE_RESULTS": "1"}
+        {
+            # Startup failures then also end with a structured result message.
+            "CLAUDE_CODE_STARTUP_FAILURE_RESULTS": "1",
+            # No auto memory: memory is the workspace's memory/ files, which every harness
+            # sees. Documented to take precedence over the autoMemoryEnabled setting.
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        }
     )
     # Auth (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ...)
     # and configuration (CLAUDE_CONFIG_DIR, CLAUDE_CODE_*) per the env-vars docs.

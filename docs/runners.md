@@ -110,13 +110,25 @@ The agent has a shell and reads the web, so the CLI does **not** inherit the ser
    - names and prefixes listed in `COACH_<NAME>_PASS_ENV`.
 
    No `COACH_*` variable passes unless it is listed in `COACH_<NAME>_PASS_ENV`.
-2. The adapter's fixed additions (Claude: `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`).
+2. The adapter's fixed additions (Claude: `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`).
 3. `COACH_<NAME>_ENV`.
 4. `RunRequest.env`: this is how the bridge hands the agent its own settings, such as `COACH_DATABASE_URL` set to the `coach_agent` URL.
 
 With `COACH_AGENT_USER` set, `HOME`, `USER` and `LOGNAME` describe the agent user instead, the variables of the agent's credential file are added, and the C library removes `TMPDIR` (see below).
 
 The healthcheck uses the same environment. Bedrock, Vertex or Foundry credentials (`AWS_*`, `GOOGLE_*`) do not pass by default; list them in `COACH_CLAUDE_PASS_ENV` if you use them. When you run `coach runner run` from inside another Claude Code session, that session's `CLAUDE_*` variables pass through as well; use a clean shell for manual tests.
+
+### No memory of the harness's own
+
+The coach's memory is the workspace's `memory/` files (docs/ARCHITECTURE.md, principle 1), because the next session may run on another harness. Every adapter keeps its harness's own memory feature off on every run, whatever the harness's settings and configuration files say:
+
+| Harness | Memory feature | What the adapter does |
+|---|---|---|
+| Claude Code | Auto memory (`~/.claude/projects/<project>/memory/`), on by default | Sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. Env-vars reference: "Set to `1` to disable auto memory. [...] When disabled, Claude does not create or load auto memory files". Settings reference (`autoMemoryEnabled`): "`CLAUDE_CODE_DISABLE_AUTO_MEMORY` takes precedence over this key for one session, in either direction" |
+| Codex | Memories (`$CODEX_HOME/memories*/`), off by default (`[features] memories`) | Passes `-c features.memories=false`, because the agent's `config.toml` could turn them on and a `-c` override outranks every configuration file |
+| Cursor CLI | None in the CLI documentation (overview, parameters, configuration, changelog; checked 2026-11) | Nothing; check again when upgrading |
+
+`COACH_<NAME>_ENV` and `COACH_<NAME>_ARGS` come later on the command line and in the environment, so they could switch a memory back on; do not. The same goes for the agent's own credential file (applied last, see [The agent's own Unix user](#the-agents-own-unix-user)): this keeps the coach from using a harness memory by accident; it does not stop an agent that sets out to. Notes Claude Code wrote before this setting existed stay in the agent's home but are no longer loaded; delete them there if you want them gone.
 
 ## Claude Code
 
@@ -144,6 +156,7 @@ The prompt goes to stdin and `RunRequest.system_append` to a file in a new direc
 | `--permission-prompts none` | Anything that would still prompt is denied instead of waited on; removes `AskUserQuestion`. Needs Claude Code ≥ 2.1.259 | docs, `--help`, real run |
 | prompt on stdin | | docs, real run |
 | `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1` | Startup failures also end with a structured result message | docs only |
+| `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | No auto memory (see [No memory of the harness's own](#no-memory-of-the-harnesss-own)) | docs only |
 
 What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). The first three were a new session, a resume of it with one Bash call, and a run with a deliberately invalid `CLAUDE_CODE_OAUTH_TOKEN`; their anonymised output is in `tests/runner/fixtures/claude/`. The fourth went through `coach runner run` with an allow-listed environment and a `system_append` that told the model to answer "BANANA", which it did. Details that are not obvious from the docs:
 
@@ -179,7 +192,7 @@ What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). 
 Built from developers.openai.com/codex (non-interactive mode, CLI reference, configuration reference, authentication) and the JSONL event definitions in the openai/codex repository (`codex-rs/exec/src/exec_events.rs`, `codex-rs/exec/src/cli.rs`). The CLI was not installed; the parser is tested only with the documented sample stream and synthetic fixtures.
 
 ```
-codex exec --json --skip-git-repo-check --cd <cwd>
+codex exec --json --skip-git-repo-check --cd <cwd> -c features.memories=false
       [--model <model>]
       --dangerously-bypass-approvals-and-sandbox
       [COACH_CODEX_ARGS]
@@ -190,6 +203,7 @@ codex exec --json --skip-git-repo-check --cd <cwd>
 - `system_append` is **prepended to the stdin prompt** (separated by a `---` line), so `supports_system_append` is `False`. Codex's `developer_instructions` setting would add real developer instructions, but it can only be given as a `-c` argument, which is visible via `ps`; its file setting `model_instructions_file` replaces the built-in instructions and `AGENTS.md` instead of adding to them.
 - All options come before `resume`: in `cli.rs`, `--json`, `--model`, `--skip-git-repo-check` and the bypass flag are global, but `--cd` and `--sandbox` are not.
 - `--skip-git-repo-check` because the coach workspace need not be a Git repository.
+- `-c features.memories=false` keeps Codex's memories off (see [No memory of the harness's own](#no-memory-of-the-harnesss-own)); the CLI reference lists `-c, --config` among the `codex exec` options.
 - Events: `thread.started` → `Started(thread_id)`; `item.*` with `agent_message` → text progress (the last one is the answer); `command_execution`, `file_change`, `mcp_tool_call`, `web_search`, `collab_tool_call` → one tool line; `turn.completed` → success and usage; `turn.failed` / `error` → failure, classified from the message text. `turn.completed` and `turn.failed` start the exit wait. Codex reports no cost.
 - Models: no default; set `COACH_CODEX_MODEL_FAST/SMART` (model names change often; see the Codex models page).
 - Authentication: `codex login --device-auth` on the server (or copy `~/.codex/auth.json`, which is a password-equivalent file; `CODEX_HOME` moves it), or `CODEX_API_KEY` for API billing. The healthcheck runs `codex login status` (exit code 0 when logged in).

@@ -13,7 +13,9 @@ Command line (working directory = RunRequest.cwd; also passed as --workspace):
           -- <prompt>
 
 The CLI has no option for extra system instructions, so RunRequest.system_append
-is prepended to the prompt.
+is prepended to the prompt. Its documentation describes no memory feature of its
+own, so there is nothing to turn off (the coach's memory is the workspace's
+memory/ files).
 
 WARNING: the documentation offers no stdin or file route for the prompt, so the
 prompt (with any system_append) is a command-line argument and visible to every
