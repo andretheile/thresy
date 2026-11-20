@@ -6,16 +6,19 @@ One run:
    every table in it; ``pg_dump`` then dumps exactly that snapshot, so the counts describe the
    dump.
 2. Uploads ``runs/<run id>/thresy.dump``, ``runs/<run id>/memory.tar.gz`` (the workspace's
-   ``memory/``), every FIT file not uploaded before as ``fit/<YYYY>/<id>.fit``, and last
-   ``runs/<run id>/manifest.json`` (row counts, versions, objects with sizes and SHA-256). With
-   age recipients configured, each file is encrypted first and gets the suffix ``.age``.
+   ``memory/``), ``runs/<run id>/scripts.tar.gz`` (the analysis scripts the coach keeps in
+   ``scripts/``, when that directory exists; runs before it was added have none), every FIT
+   file not uploaded before as ``fit/<YYYY>/<id>.fit``, and last ``runs/<run id>/manifest.json``
+   (row counts, versions, objects with sizes and SHA-256). With age recipients configured, each
+   file is encrypted first and gets the suffix ``.age``. Links in the workspace are skipped,
+   never followed.
 3. Records the outcome in ``sync_state`` (``backup_status``; the FIT files already uploaded in
    ``backup_fit``). A failure also raises a ``backup_failed`` event (once per UTC day) that the
    bridge reports to the athlete.
 
 Nothing secret is backed up: the dump holds the database (no secrets are stored in tables),
-the memory files are the agent's notes, FIT files are activity recordings. Tokens, keys and
-``.env`` are never read.
+the memory files and kept scripts are the agent's notes and code, FIT files are activity
+recordings. Tokens, keys and ``.env`` are never read.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ EVENT_KIND = "backup_failed"
 SCRATCH_PREFIX = "thresy_restore_check_"
 DUMP_NAME = "thresy.dump"
 MEMORY_NAME = "memory.tar.gz"
+SCRIPTS_NAME = "scripts.tar.gz"
 MANIFEST_NAME = "manifest.json"
 MANIFEST_FORMAT = 1
 FIT_STATE_SAVE_EVERY = 25
@@ -144,6 +148,7 @@ class BackupResult:
     fit_present: int = 0
     fit_total: int = 0
     memory_files: int = 0
+    scripts_files: int = 0
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     restore_check: RestoreCheckResult | None = None
@@ -167,6 +172,7 @@ class BackupResult:
             "fit_present": self.fit_present,
             "fit_total": self.fit_total,
             "memory_files": self.memory_files,
+            "scripts_files": self.scripts_files,
             "duration_s": round(self.duration_s, 1),
         }
 
@@ -185,7 +191,7 @@ class BackupResult:
         lines = [
             f"backup {self.run_id}: {'ok' if self.ok else 'FAILED'} in {self.duration_s:.0f} s",
             f"  database: {sum(self.row_counts.values())} rows in {len(self.row_counts)} tables",
-            f"  memory files: {self.memory_files}",
+            f"  memory files: {self.memory_files}, kept scripts: {self.scripts_files}",
             f"  FIT files: {self.fit_uploaded} uploaded, {self.fit_present} already there, "
             f"{self.fit_total} in total",
             f"  objects created: {sum(1 for o in self.objects if o.get('created'))}, "
@@ -282,14 +288,15 @@ def make_dump(url: str, tool: pg.Tool, target: Path) -> dict[str, int]:
     return counts
 
 
-def memory_archive(workspace: Path, target: Path) -> int:
-    """``memory/`` of the workspace as a gzip'd tar; returns the number of files. Symlinks and
-    special files are skipped; an unreadable file is an error."""
-    memory = workspace / "memory"
+def workspace_archive(workspace: Path, name: str, target: Path) -> int:
+    """``<name>/`` of the workspace (``memory`` or ``scripts``) as a gzip'd tar; returns the
+    number of files. Symlinks and special files are skipped, never followed; an unreadable file
+    is an error."""
+    root = workspace / name
     count = 0
     with tarfile.open(target, "w:gz") as archive:
-        archive.add(memory, arcname="memory", recursive=False)
-        for path in sorted(memory.rglob("*")):
+        archive.add(root, arcname=name, recursive=False)
+        for path in sorted(root.rglob("*")):
             rel = path.relative_to(workspace).as_posix()
             if path.is_symlink() or not (path.is_dir() or path.is_file()):
                 continue
@@ -429,13 +436,20 @@ def run_backup(
         if should_stop():
             raise BackupInterrupted("stopped after the dump")
 
-        memory = config.workspace_dir / "memory"
-        if memory.is_dir():
-            archive = work / MEMORY_NAME
-            result.memory_files = memory_archive(config.workspace_dir, archive)
-            uploader.put(prefix + MEMORY_NAME, archive)
-        else:
-            result.warnings.append(f"no memory/ in the workspace {config.workspace_dir}")
+        for name, object_name in (("memory", MEMORY_NAME), ("scripts", SCRIPTS_NAME)):
+            root = config.workspace_dir / name
+            if root.is_symlink():  # never followed: it could point at a secret
+                result.warnings.append(f"{name}/ in the workspace is a link; not backed up")
+            elif root.is_dir():
+                archive = work / object_name
+                count = workspace_archive(config.workspace_dir, name, archive)
+                if name == "memory":
+                    result.memory_files = count
+                else:
+                    result.scripts_files = count
+                uploader.put(prefix + object_name, archive)
+            elif name == "memory":  # a missing scripts/ only means none were kept yet
+                result.warnings.append(f"no memory/ in the workspace {config.workspace_dir}")
 
         log.info("backup %s: uploading new FIT files", result.run_id)
         _upload_fit(config, uploader, result, should_stop)
@@ -506,6 +520,7 @@ def _manifest(config: BackupConfig, result: BackupResult) -> dict[str, Any]:
             "prefix": "fit/",
         },
         "memory_files": result.memory_files,
+        "scripts_files": result.scripts_files,
         "restore_check": result.restore_check.as_dict() if result.restore_check else None,
         "warnings": result.warnings,
         "errors": result.errors,

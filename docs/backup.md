@@ -1,10 +1,11 @@
 # Backups
 
 The `backup` service (`coach backup schedule`) backs up every night what cannot be fetched
-again: the database, the original FIT files and the coach's memory files. It writes to a
-Google Cloud Storage bucket (or a local directory) with a credential that can **create objects
-and nothing else**, so a stolen key can neither read nor delete the backups. Optionally
-everything is encrypted with [age](https://age-encryption.org) before it leaves the server.
+again: the database, the original FIT files, and the coach's memory files and kept analysis
+scripts. It writes to a Google Cloud Storage bucket (or a local directory) with a credential
+that can **create objects and nothing else**, so a stolen key can neither read nor delete the
+backups. Optionally everything is encrypted with [age](https://age-encryption.org) before it
+leaves the server.
 
 ## What is backed up, and what is not
 
@@ -12,11 +13,15 @@ everything is encrypted with [age](https://age-encryption.org) before it leaves 
 |---|---|---|
 | The whole database (activities, records, wellness, plans, races, chat log, events, sync state) | `runs/<run id>/thresy.dump`: `pg_dump --format=custom` (compressed), of one consistent snapshot | every run |
 | The coach's memory: the workspace's `memory/` | `runs/<run id>/memory.tar.gz` | every run |
+| The analysis scripts the coach keeps: the workspace's `scripts/` (docs/workspace.md) | `runs/<run id>/scripts.tar.gz` | every run while `scripts/` exists; runs made before this was added have none |
 | Original FIT files under `COACH_DATA_DIR/fit/` | `fit/<YYYY>/<activity id>.fit`, the same path as on the server | once per file |
 | A manifest: row counts of every table in the dumped snapshot, PostgreSQL and pg_dump versions, objects with size and SHA-256, FIT counts, restore-check result | `runs/<run id>/manifest.json`, written last | every run |
 
 With encryption every object gets the suffix `.age`. A run id looks like
-`20300102T023000Z-1a2b3c` (UTC time plus a random part), so names never repeat.
+`20300102T023000Z-1a2b3c` (UTC time plus a random part), so names never repeat. Links inside
+`memory/` and `scripts/` are skipped, never followed, and so is either directory when it is a
+link (with a warning in the run's result): the agent owns the workspace and could otherwise
+point the backup at a file it must not copy, such as the bucket key.
 
 Not backed up, on purpose:
 
@@ -26,16 +31,16 @@ Not backed up, on purpose:
 - **The agent's home** (`agent-home` volume: the CLI's settings and session transcripts; the
   conversation that matters is in the database's `messages` table) and the rest of the
   workspace: `AGENTS.md`, `CLAUDE.md` and `playbooks/` come from the template in the image;
-  `out/` holds generated plots; `inbox/` holds files the athlete sent in the chat, which are
-  also in the chat itself.
+  `scratch/` holds throwaway files; `out/` holds generated plots; `inbox/` holds files the
+  athlete sent in the chat, which are also in the chat itself.
 - Docker images and logs.
 
 ## How a run works
 
 1. A read-only transaction exports its snapshot and counts the rows of every table; `pg_dump`
    dumps exactly that snapshot, so the manifest's counts describe the dump.
-2. The dump, the memory archive, every FIT file that has not been uploaded yet and the
-   manifest are encrypted (if configured) and uploaded with "create only" semantics: for a
+2. The dump, the memory and scripts archives, every FIT file that has not been uploaded yet and
+   the manifest are encrypted (if configured) and uploaded with "create only" semantics: for a
    bucket an upload with `ifGenerationMatch=0`, for a directory an exclusive create. Nothing is
    ever listed, read, overwritten or deleted.
 3. Which FIT files are uploaded is remembered in the database (`sync_state` key `backup_fit`:
@@ -77,7 +82,8 @@ The service uses the `coach_app` database role, which needs `CREATEDB` for the r
 ## Commands
 
 ```sh
-docker compose exec backup coach backup status          # last success, failures, last restore check
+docker compose exec backup coach backup status          # last success (with memory files and
+                                                        # kept scripts), failures, restore check
 docker compose exec backup coach backup run             # back up now (add --restore-check)
 docker compose exec backup coach backup restore-check   # restore a fresh dump into a scratch DB
 docker compose logs -f backup
@@ -227,6 +233,7 @@ docker exec thresy-drill psql -U postgres -d thresy -c \
    select 'messages', count(*) from messages"
 python3 -c "import json; print(json.load(open('manifest.json'))['row_counts'])"   # must match
 tar -tzf memory.tar.gz                                    # the memory files
+tar -tzf scripts.tar.gz                                   # the kept scripts (newer runs only)
 docker rm -f thresy-drill && cd ../.. && rm -rf drill     # the drill holds health data
 ```
 
@@ -257,10 +264,15 @@ docker compose run --rm migrate
 docker compose run --rm --no-deps -v "$PWD/restore/fit:/restore-fit:ro" sync \
   sh -c 'mkdir -p /data/fit && cp -R /restore-fit/. /data/fit/'
 
-# 4. Memory files into the workspace (seeds the template first if the volume is new).
+# 4. Memory files and kept scripts into the workspace (the first command seeds the template if
+#    the volume is new). A run made before scripts were backed up has no scripts.tar.gz: skip
+#    the last two lines.
 tar -xzf restore/<RUN_ID>/memory.tar.gz -C restore
 tar -C restore/memory -c . | docker compose run --rm -T --no-deps bridge \
   coach workspace init --memory-from -
+tar -xzf restore/<RUN_ID>/scripts.tar.gz -C restore
+tar -C restore/scripts -c . | docker compose run --rm -T --no-deps bridge \
+  coach workspace init --scripts-from -
 
 # 5. Start everything, log in to Garmin again (docs/deploy.md), check.
 docker compose up -d

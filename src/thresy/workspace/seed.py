@@ -8,7 +8,9 @@ Rules:
   template's content. Files under ``playbooks/`` that the template no longer has are reported
   and left alone. Nothing else is written; template files outside the owned paths that are
   missing in the workspace (a new memory skeleton, say) are reported as not copied.
-* ``out/`` and ``inbox/`` are created when missing (empty directories; the bridge needs them).
+* ``out/``, ``inbox/`` and ``scripts/`` (:data:`CREATED_DIRS`) are created when missing, as
+  empty directories, on the first and on every later run; nothing is ever written into them.
+  ``scripts/`` holds the analysis scripts the coach keeps (``playbooks/scripts.md``).
 * Writes are atomic (temporary file in the same directory, then rename), so a reader never sees
   half a file, and an agent's symlink in place of a template file is replaced, not followed.
 * **Shared workspace:** when the workspace directory has the setgid bit (the container image
@@ -16,8 +18,9 @@ Rules:
   0660, so the agent can edit what this command (run as the bridge's user) creates. Otherwise
   the process umask decides.
 
-:func:`import_memory` copies an athlete's own memory files (a directory, or a tar archive on
-stdin) into ``memory/``, replacing files of the same name. It runs only when asked.
+:func:`import_memory` and :func:`import_scripts` copy files (a directory, or a tar archive on
+stdin) into ``memory/`` or ``scripts/``, replacing files of the same name: an athlete's own
+memory files when seeding, both when restoring a backup. They run only when asked.
 """
 
 from __future__ import annotations
@@ -34,13 +37,16 @@ from typing import IO
 
 TEMPLATE_OWNED: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md", "playbooks")
 """Paths the template keeps up to date on every run."""
-AGENT_OWNED: tuple[str, ...] = ("memory", "out", "inbox")
-"""Paths seeded once (``out/``, ``inbox/`` also created when missing) and never touched again."""
+AGENT_OWNED: tuple[str, ...] = ("memory", "scripts", "out", "inbox")
+"""Paths seeded once (or created empty, :data:`CREATED_DIRS`) and never touched again."""
+CREATED_DIRS: tuple[str, ...] = ("out", "inbox", "scripts")
+"""Directories created (empty) whenever they are missing; their content is never written."""
+# Not "scripts": a workspace whose only content is kept scripts is never seeded over.
 _IGNORED_FOR_EMPTY = frozenset({"out", "inbox", "lost+found"})
 _SKIP_NAMES = frozenset({".DS_Store", "__pycache__"})
 SHARED_DIR_MODE = 0o2770
 SHARED_FILE_MODE = 0o660
-MAX_MEMORY_FILE = 10 * 1024 * 1024
+MAX_IMPORT_FILE = 10 * 1024 * 1024
 
 
 class WorkspaceError(RuntimeError):
@@ -64,6 +70,7 @@ class InitResult:
     """Template-owned paths that are a directory on one side and a file on the other."""
     created_dirs: list[str] = field(default_factory=list)
     memory_imported: list[str] = field(default_factory=list)
+    scripts_imported: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -78,6 +85,7 @@ class InitResult:
             "conflicts": self.conflicts,
             "created_dirs": self.created_dirs,
             "memory_imported": self.memory_imported,
+            "scripts_imported": self.scripts_imported,
         }
 
     def text(self) -> str:
@@ -103,6 +111,7 @@ class InitResult:
             f"  CONFLICT {p} (file on one side, directory on the other)" for p in self.conflicts
         ]
         lines += [f"  memory   {p}" for p in self.memory_imported]
+        lines += [f"  script   {p}" for p in self.scripts_imported]
         return "\n".join(lines)
 
 
@@ -210,8 +219,11 @@ def init_workspace(workspace: Path, template: Path | None = None) -> InitResult:
                 result.conflicts.append(str(rel))
             elif writer.mkdir(target) and not fresh:
                 result.created_dirs.append(str(rel))
-    for name in ("out", "inbox"):
-        if not (workspace / name).exists() and writer.mkdir(workspace / name) and not fresh:
+    for name in CREATED_DIRS:
+        path = workspace / name
+        if path.exists() or path.is_symlink():  # a link (even a dangling one) is left alone
+            continue
+        if writer.mkdir(path) and not fresh:
             result.created_dirs.append(name)
 
     seen: set[PurePosixPath] = set()
@@ -254,26 +266,38 @@ def init_workspace(workspace: Path, template: Path | None = None) -> InitResult:
 
 
 def import_memory(workspace: Path, source: Path | IO[bytes]) -> list[str]:
-    """Copy memory files into ``<workspace>/memory/``, replacing files of the same name.
+    """Copy memory files into ``<workspace>/memory/`` (see :func:`_import_files`)."""
+    return _import_files(workspace, "memory", source)
+
+
+def import_scripts(workspace: Path, source: Path | IO[bytes]) -> list[str]:
+    """Copy kept scripts into ``<workspace>/scripts/`` (see :func:`_import_files`)."""
+    return _import_files(workspace, "scripts", source)
+
+
+def _import_files(workspace: Path, subdir: str, source: Path | IO[bytes]) -> list[str]:
+    """Copy files into ``<workspace>/<subdir>/``, replacing files of the same name.
 
     ``source`` is a directory (every regular file below it, symlinks skipped) or a binary
     stream with a tar archive (only regular files and directories, no absolute paths, nothing
-    leading out of ``memory/``). Returns the paths written, relative to the workspace.
+    leading out of ``<subdir>/``). Returns the paths written, relative to the workspace.
     """
     workspace = workspace.expanduser().resolve()
-    memory = workspace / "memory"
+    root = workspace / subdir
+    if root.is_symlink():
+        raise WorkspaceError(f"{subdir}/ in the workspace is a link; not writing through it")
     writer = _Writer(workspace)
-    writer.mkdir(memory)
+    writer.mkdir(root)
     written: list[str] = []
 
     def put(rel: PurePosixPath, data: bytes) -> None:
         if rel.is_absolute() or ".." in rel.parts or not rel.parts:
-            raise WorkspaceError(f"unsafe path in the memory files: {rel}")
-        target = memory / rel
+            raise WorkspaceError(f"unsafe path in the files for {subdir}/: {rel}")
+        target = root / rel
         if target.is_dir():
-            raise WorkspaceError(f"memory/{rel} is a directory in the workspace")
+            raise WorkspaceError(f"{subdir}/{rel} is a directory in the workspace")
         writer.write(target, data)
-        written.append(f"memory/{rel}")
+        written.append(f"{subdir}/{rel}")
 
     if isinstance(source, Path):
         source = source.expanduser()
@@ -298,8 +322,8 @@ def import_memory(workspace: Path, source: Path | IO[bytes]) -> list[str]:
                 continue
             if not member.isreg():
                 raise WorkspaceError(f"only regular files may be imported, not {member.name}")
-            if member.size > MAX_MEMORY_FILE:
-                raise WorkspaceError(f"{member.name} is larger than {MAX_MEMORY_FILE} bytes")
+            if member.size > MAX_IMPORT_FILE:
+                raise WorkspaceError(f"{member.name} is larger than {MAX_IMPORT_FILE} bytes")
             fh = archive.extractfile(member)
             if fh is None:
                 continue
