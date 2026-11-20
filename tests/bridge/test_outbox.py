@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,7 @@ def test_coach_send_rows_are_delivered_in_order_before_the_answer(make_harness) 
                 ("text", "Final words"),
             ]
             assert h.transport.sent[1].item.file_path == (h.workspace / "out" / "plot.png")
+            assert h.transport.sent[1].item.data == PNG  # read by the bridge, once
             assert all(r.item.chat_id == CHAT for r in h.transport.sent)
             run_id = h.one("SELECT id FROM agent_runs")["id"]
             rows = h.rows(
@@ -140,6 +142,62 @@ def test_rows_the_agent_wrote_with_sql_are_checked_again(make_harness, tmp_path)
             assert "invalid options" in errors[4]
             assert "empty text" in errors[5]
             assert errors[6] is None
+
+    asyncio.run(scenario())
+
+
+def test_files_swapped_for_links_after_coach_send_are_refused(make_harness, tmp_path) -> None:
+    """The agent queues files that pass `coach send`'s check, then swaps them for links to
+    something only the bridge may read (in the container, e.g. /proc/self/environ)."""
+    secret = b"COACH_TELEGRAM_TOKEN=bridge-only"
+    bridge_only = tmp_path / "bridge-only"
+    bridge_only.mkdir()
+    (bridge_only / "environ").write_bytes(secret)
+    (bridge_only / "data.csv").write_bytes(secret)
+    results = []
+
+    def script(req):
+        env = dict(req.env)
+        out = Path(env["COACH_WORKSPACE_DIR"]) / "out"
+        (out / "sub").mkdir(parents=True, exist_ok=True)
+        (out / "plot.png").write_bytes(PNG)
+        (out / "sub" / "data.csv").write_text("a,b\n1,2\n")
+        (out / "fine.png").write_bytes(PNG)
+        results.append(coach(["send", "photo", str(out / "plot.png")], env))
+        results.append(coach(["send", "document", str(out / "sub" / "data.csv")], env))
+        results.append(coach(["send", "photo", str(out / "fine.png"), "-c", "still fine"], env))
+        # After the check, before the bridge reads: a link as the file, a link as a parent.
+        (out / "plot.png").unlink()
+        (out / "plot.png").symlink_to(bridge_only / "environ")
+        shutil.rmtree(out / "sub")
+        (out / "sub").symlink_to(bridge_only)
+        return [Progress("text", "Here you go")]
+
+    async def scenario() -> None:
+        async with make_harness(FakeRunner(script)) as h:
+            await h.say("send me the files")
+            await h.settle()
+            assert all(r.exit_code == 0 for r in results), [r.output for r in results]
+            # A path that escapes out/, inserted with plain SQL.
+            h.conn.execute(
+                "INSERT INTO outbox (chat_id, kind, file_path) VALUES (%s, 'document', %s)",
+                (CHAT, str(h.workspace / "out" / ".." / ".." / "bridge-only" / "environ")),
+            )
+            await h.settle()
+            sent = [(r.item.kind, r.item.text, r.item.data) for r in h.transport.sent]
+            assert sent == [("photo", "still fine", PNG), ("text", "Here you go", None)]
+            errors = [
+                r["error"]
+                for r in h.rows("SELECT error FROM outbox WHERE sent_at IS NULL ORDER BY id")
+            ]
+            assert errors[0] == (
+                "refused: out/plot.png is a symbolic link; files are never read through links"
+            )
+            assert errors[1] == (
+                "refused: out/sub is a symbolic link; files are never read through links"
+            )
+            assert errors[2].startswith("document files must be under ")
+            assert len(errors) == 3
 
     asyncio.run(scenario())
 

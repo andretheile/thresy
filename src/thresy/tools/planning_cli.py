@@ -78,6 +78,14 @@ WEATHER_HELP = _help(
     also past ones (up to 92 days back, e.g. the weather during a run). Times are local to the
     place. Look before you plan or move a session outdoors, and say what the weather means for
     the run (a slippery track, heat, wind on an exposed course), not just the numbers.""",
+    """Each day first gets a summary line in words, built from the numbers of its daily row.
+    The weather word is the worst weather of the day, not all-day weather. Rain (or snow):
+    "dry" below 0.2 mm with a chance below 30 %, "rain possible" otherwise below 0.2 mm, "a
+    little rain" from 0.2 mm, "rain" from 1 mm, "heavy rain" from 10 mm. Wind, from the
+    higher-ranking of gusts and mean wind: "little wind", "breezy" (gusts from 30 or wind from
+    20 km/h), "windy" (50 or 40), "stormy" (75 or 60). "frost" at 0 °C or below, "warm" from
+    25 °C, "hot" from 30 °C. Call a day dry only if its line says "dry", and calm only if it
+    says "little wind".""",
     "Source: Open-Meteo (open-meteo.com), no key needed. Needs internet access.",
 )
 

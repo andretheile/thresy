@@ -136,6 +136,7 @@ def make_bridge_settings(**overrides: Any) -> BridgeSettings:
         "bridge_quiet_hours": "off",
         "bridge_run_timeout_s": 30,
         "bridge_briefing_settle_s": 0,  # tests of the settle delay set it themselves
+        "home_location": None,  # not from the developer's environment
     }
     values.update(overrides)
     return BridgeSettings(_env_file=None, **values)

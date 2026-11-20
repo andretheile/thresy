@@ -161,6 +161,84 @@ def test_unreachable_service(monkeypatch) -> None:
         weather.geocode(client, "Springfield")
 
 
+def day(**values: Any) -> dict[str, Any]:
+    row = {
+        "time": "2030-01-02",
+        "weather_code": 1,
+        "temperature_2m_min": 3.0,
+        "temperature_2m_max": 12.0,
+        "precipitation_sum": 0.0,
+        "precipitation_probability_max": 10,
+        "precipitation_hours": 0.0,
+        "wind_speed_10m_max": 8.0,
+        "wind_gusts_10m_max": 15.0,
+    }
+    row.update(values)
+    return row
+
+
+def test_day_summary_names_showers_and_gusts() -> None:
+    # Showers and strong gusts in a row of numbers are easy to read past: the words name them.
+    stormy = day(
+        weather_code=81,
+        temperature_2m_min=2.0,
+        temperature_2m_max=8.0,
+        precipitation_sum=4.2,
+        precipitation_probability_max=80,
+        precipitation_hours=5.0,
+        wind_speed_10m_max=30.0,
+        wind_gusts_10m_max=55.0,
+    )
+    assert weather.day_summary(stormy) == (
+        "showers; rain (4.2 mm in 5 h, chance 80%); windy (wind up to 30, gusts up to 55 km/h);"
+        " 2 to 8 °C"
+    )
+    assert weather.day_summary(day()) == (
+        "mainly clear; dry (0.0 mm, chance 10%); little wind (wind up to 8, gusts up to 15 km/h);"
+        " 3 to 12 °C"
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "words"),
+    [
+        ({"precipitation_sum": 0.1, "precipitation_probability_max": 40}, "rain possible"),
+        ({"precipitation_sum": 0.1, "weather_code": 80}, "rain possible"),
+        ({"precipitation_sum": 0.5}, "a little rain"),
+        ({"precipitation_sum": 1.0}, "rain"),
+        ({"precipitation_sum": 12.0}, "heavy rain"),
+        ({"precipitation_sum": 3.0, "weather_code": 73}, "snow"),
+        ({"precipitation_sum": None, "precipitation_probability_max": 5}, "probably dry"),
+        ({"precipitation_sum": None, "precipitation_probability_max": None}, "rain: no data"),
+    ],
+)
+def test_rain_thresholds(values: dict[str, Any], words: str) -> None:
+    assert weather.rain_words(day(**values)).split(" (")[0] == words
+
+
+@pytest.mark.parametrize(
+    ("wind", "gusts", "words"),
+    [
+        (19.0, 29.0, "little wind"),
+        (20.0, 25.0, "breezy"),
+        (10.0, 30.0, "breezy"),
+        (25.0, 50.0, "windy"),
+        (40.0, 45.0, "windy"),
+        (30.0, 75.0, "stormy"),
+        (None, None, "wind: no data"),
+    ],
+)
+def test_wind_thresholds(wind: float | None, gusts: float | None, words: str) -> None:
+    row = day(wind_speed_10m_max=wind, wind_gusts_10m_max=gusts)
+    assert weather.wind_words(row).split(" (")[0] == words
+
+
+def test_temperature_words() -> None:
+    assert weather.temperature_words(day(temperature_2m_min=-2.0)) == "-2 to 12 °C, frost"
+    assert weather.temperature_words(day(temperature_2m_max=26.0)) == "3 to 26 °C, warm"
+    assert weather.temperature_words(day(temperature_2m_max=31.0)) == "3 to 31 °C, hot"
+
+
 def test_describe_codes() -> None:
     assert weather.describe(0) == "clear"
     assert weather.describe(65) == "heavy rain"
@@ -178,6 +256,15 @@ def test_default_uses_home_location(fake: FakeOpenMeteo, env: dict[str, str]) ->
     assert out.startswith("Weather for Springfield (North Province, XA; 10.500, 20.250)")
     assert "Other places with this name: Springfield, Hillside" in out
     assert "Daily" in out and "light showers" in out and "1/9" in out
+    # A summary in words for every day, ahead of the table it is built from.
+    summary = out.index("Daily summary")
+    assert summary < out.index("\nDaily (whole days")
+    today = local_today()
+    line = (
+        f"{today.strftime('%a %m-%d')}: light showers; rain (2.5 mm in 3 h, chance 60%); "
+        "breezy (wind up to 20, gusts up to 45 km/h); 1 to 9 °C"
+    )
+    assert line in out[summary : out.index("\nDaily (whole days")]
     tomorrow = local_today() + timedelta(days=1)
     assert f"Hourly, {tomorrow.strftime('%a %Y-%m-%d')}" in out
     params = fake.forecast_params()
@@ -207,6 +294,8 @@ def test_past_day_uses_past_days(fake: FakeOpenMeteo, env: dict[str, str]) -> No
     assert fake.forecast_params()["past_days"] == "5"
     assert len(data["hourly"][day.isoformat()]) == 17  # 06:00-22:00
     assert data["daily"][0]["time"] == local_today().isoformat()
+    assert data["daily"][0]["summary"].startswith("light showers; rain (2.5 mm")
+    assert data["daily"][0]["precipitation_sum"] == 2.5  # the numbers are unchanged
     assert len(data["daily"]) == 7
     assert data["place"]["name"] == "Springfield"
 

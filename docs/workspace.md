@@ -79,8 +79,9 @@ agent's role (`coach_agent` may write `planned_workouts` and `races`), print tex
 JSON with `--json`, and accept days as `YYYY-MM-DD`, `today`, `tomorrow`, `yesterday`, a weekday
 (`fri`: the next one, today included) or `+N`, in the athlete's time zone (`COACH_TZ`).
 
-- **`coach weather [PLACE]`**: Open-Meteo (free, no key). Daily rows for `--days` (default 7) and
-  hourly rows from now to 22:00 today and 6:00–22:00 tomorrow; `--date` (repeatable) picks other
+- **`coach weather [PLACE]`**: Open-Meteo (free, no key). Daily rows for `--days` (default 7),
+  each day first summarised in words with fixed thresholds ("rain", "windy", "frost"; listed in
+  `--help` and `thresy.tools.weather`; JSON field `summary`), and hourly rows from now to 22:00 today and 6:00–22:00 tomorrow; `--date` (repeatable) picks other
   days, up to 16 ahead and 92 back (the weather during a past run). A place is a name, a name with
   a qualifier (`"Springfield, Illinois"`) or `lat,lon`; the output names the place found and
   others with the same name. Default place: **`COACH_HOME_LOCATION`** (own settings class
@@ -108,7 +109,8 @@ JSON with `--json`, and accept days as `YYYY-MM-DD`, `today`, `tomorrow`, `yeste
   is `COACH_NAME`. Neither appears in the template.
 - Never put anything from a real athlete into the template: no names, places, paces, heart
   rates, races, dates or quotes. Lessons from a real athlete's history go in as general lessons,
-  in your own words.
+  in your own words, with the reason stated as what generally goes wrong, not as one
+  deployment's past (most deployments had no coach before).
 
 ## Seeding an athlete
 
@@ -156,13 +158,12 @@ From six real runs with Claude Code 2.1.327 (Sonnet tier) against the dev databa
 - **Workspace location:** `CLAUDE.md` is not loaded when the working directory is under `/tmp`.
   The workspace volume must be mounted elsewhere; `compose.yml` currently mounts it at
   `/workspace`, which is fine.
-- **Harness memory:** in `-p` mode Claude Code's auto-memory is active and its system prompt
-  tells the model to keep a `MEMORY.md` under `~/.claude/projects/…`. The brief tells the coach
-  not to use it, but the runner should switch it off for the agent's home (harness configuration
-  belongs to `thresy.runner` and the image).
+- **Harness memory:** in `-p` mode Claude Code's auto-memory was active and its system prompt
+  told the model to keep a `MEMORY.md` under `~/.claude/projects/…`. The runner now switches it
+  off on every run (docs/runners.md, "No memory of the harness's own").
 - **The operator's own configuration leaks into local trials:** with the developer's `HOME`, the
   agent sees the developer's skills, MCP servers and account e-mail. The deployment's separate
   agent home avoids this.
 - **The dev database lacked migration `0003_agent_requests`**, so `coach sync status` and
-  `coach sync request` crashed with a traceback in the trials; the coach coped, but
-  `coach sync status` could report a missing table more gracefully.
+  `coach sync request` crashed with a traceback in the trials; the coach coped. They now say in
+  one line that the database is not migrated and to run `coach db migrate`.

@@ -250,10 +250,12 @@ def test_end_to_end_with_fake_binary(tmp_path, monkeypatch):
     monkeypatch.setenv("COACH_DATABASE_URL", "postgresql://app:secret@db/coach")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
     monkeypatch.setenv("CLAUDE_CODE_SIMPLE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")  # the adapter's value wins
     env = spec_env(
         record=str(record),
         env_keys=[
             "CLAUDE_CODE_STARTUP_FAILURE_RESULTS",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
             "FROM_CONFIG",
             "FROM_REQUEST",
             "CLAUDE_CODE_OAUTH_TOKEN",
@@ -282,6 +284,7 @@ def test_end_to_end_with_fake_binary(tmp_path, monkeypatch):
     assert "--resume" in seen["argv"] and SESSION in seen["argv"]
     assert seen["env"] == {
         "CLAUDE_CODE_STARTUP_FAILURE_RESULTS": "1",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",  # no harness memory, see docs/runners.md
         "FROM_CONFIG": "c",
         "FROM_REQUEST": "r",
         "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",

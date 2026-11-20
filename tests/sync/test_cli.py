@@ -14,7 +14,7 @@ from tests import synthetic
 from tests.garmin.offline import GOOD_CODE, OfflineGarmin
 from tests.sync.helpers import StaticProvider, activity_at, fit_file, make_config, zipped
 from thresy import cli as coach_cli
-from thresy import db
+from thresy import db, migrate
 from thresy.config import get_settings
 from thresy.garmin.fake import FakeGarminClient
 from thresy.sync import agent_requests, state
@@ -167,6 +167,45 @@ def test_status_shows_errors_and_login_state(env, conn) -> None:
     result = invoke(sync_cli.app, ["status"])
     assert "log in please" in result.output and "mfa_required" in result.output
     assert "token:              missing" in result.output
+
+
+@pytest.fixture
+def unmigrated(fresh_db, tmp_path, monkeypatch):
+    """An empty database that `coach db migrate` has not been run on."""
+    monkeypatch.chdir(tmp_path)  # no .env
+    monkeypatch.setenv("COACH_DATABASE_URL", fresh_db.app_url)
+    get_settings.cache_clear()
+    monkeypatch.setattr(sync_cli, "make_config", lambda: make_config(tmp_path))
+    yield fresh_db
+    get_settings.cache_clear()
+
+
+def test_request_and_status_without_the_agent_requests_table(unmigrated, monkeypatch) -> None:
+    with db.connect(unmigrated.app_url) as conn:
+        migrate.migrate(conn)
+        conn.execute("DROP TABLE agent_requests")  # as when its migration was not applied
+    expected = (
+        'error: database is not migrated (relation "agent_requests" does not exist);'
+        " run `coach db migrate`"
+    )
+    for args in (["status"], ["request"], ["request", "--wait", "5"]):
+        result = invoke(sync_cli.app, args)
+        assert result.exit_code == 1, result.output
+        assert result.output.strip() == expected  # one line, no traceback
+        assert isinstance(result.exception, SystemExit)
+    as_agent(monkeypatch, unmigrated)  # how the agent runs it
+    result = invoke(sync_cli.app, ["request", "--wait", "5", "--json"])
+    assert result.exit_code == 1
+    assert json.loads(result.output)["error"] == expected.removeprefix("error: ")
+
+
+def test_status_on_an_empty_database(unmigrated) -> None:
+    result = invoke(sync_cli.app, ["status"])
+    assert result.exit_code == 1
+    assert result.output.strip() == (
+        'error: database is not migrated (relation "sync_state" does not exist);'
+        " run `coach db migrate`"
+    )
 
 
 def test_backfill_command(env, conn) -> None:

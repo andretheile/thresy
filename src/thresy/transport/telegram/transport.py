@@ -2,18 +2,23 @@
 
 Inbound: text, photos, documents, voice and audio messages, and presses of the buttons of a
 ``choice``. Files are saved under ``inbox_dir`` (the workspace's ``inbox/``) so the agent can
-read them. Updates from chats that are not allow-listed are dropped and logged without content
-(the chat id is logged so the owner can find it when setting the bot up).
+read them; the agent can change that directory, so files are created without following links
+(:mod:`thresy.transport.files`). Updates from chats that are not allow-listed are dropped and
+logged without content (the chat id is logged so the owner can find it when setting the bot
+up).
 
 Outbound: Markdown is rendered to text plus entities (see :mod:`.markdown`), split under the
-size limit, and sent without entities if Telegram rejects them. Photos that Telegram refuses
-as photos are sent as documents. A ``choice`` gets one inline button per option; a pressed
-button is replaced by a single "✓ <label>" button so it cannot be pressed twice.
+size limit, and sent without entities if Telegram rejects them. Files are sent from
+``OutboundItem.data``, the bytes the bridge read; the transport never opens a file path the
+agent could have swapped. Photos that Telegram refuses as photos are sent as documents. A
+``choice`` gets one inline button per option; a pressed button is replaced by a single
+"✓ <label>" button so it cannot be pressed twice.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import warnings
@@ -52,6 +57,7 @@ from thresy.transport.base import (
     MessageHandler,
     OutboundItem,
 )
+from thresy.transport.files import FileRefused, create_file_under
 
 from .markdown import CAPTION_LIMIT, Rich, format_markdown, plain, utf16_len
 
@@ -265,13 +271,10 @@ class TelegramTransport:
         return InlineKeyboardMarkup(rows)
 
     async def _send_file(self, chat: int, item: OutboundItem) -> list[str]:
-        path = item.file_path
-        if path is None:
-            raise DeliveryError("no file given", permanent=True)
-        try:
-            data = path.read_bytes()
-        except OSError as exc:
-            raise DeliveryError(f"cannot read {path.name}: {exc.strerror}", permanent=True) from exc
+        # Only the bytes the bridge read: the file at item.file_path may have been swapped.
+        path, data = item.file_path, item.data
+        if path is None or not data:
+            raise DeliveryError("no file content given (the bridge reads files)", permanent=True)
         if len(data) > MAX_DOCUMENT_BYTES:
             raise DeliveryError(f"{path.name} is larger than 50 MB", permanent=True)
         chunks = format_markdown(item.text or "") if (item.text or "").strip() else []
@@ -478,7 +481,7 @@ class TelegramTransport:
     ) -> Attachment:
         safe = _safe_name(name, kind)
         when = (message.date or datetime.now(UTC)).astimezone(UTC)
-        target = self.inbox_dir / when.strftime("%Y-%m-%d") / f"{message.message_id}-{safe}"
+        day = when.strftime("%Y-%m-%d")
         duration_s = _seconds(duration) if duration is not None else None
         common = {
             "kind": kind,
@@ -491,10 +494,23 @@ class TelegramTransport:
             error = "file larger than 20 MB (bot download limit)"
             return Attachment(path=None, error=error, **common)
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
             tg_file = await self.bot.get_file(file_id)
-            await tg_file.download_to_drive(custom_path=target)
+            data = bytes(await tg_file.download_as_bytearray())
         except (TelegramError, OSError) as exc:
-            log.warning("telegram: could not save a %s: %s", kind, exc)
+            log.warning("telegram: could not download a %s: %s", kind, exc)
             return Attachment(path=None, error=f"download failed: {exc}", **common)
+        try:
+            target = await asyncio.to_thread(self._save, day, message.message_id, safe, data)
+        except (FileRefused, OSError) as exc:
+            log.warning("telegram: could not save a %s: %s", kind, exc)
+            return Attachment(path=None, error=f"could not save the file: {exc}", **common)
         return Attachment(path=target, **common)
+
+    def _save(self, day: str, message_id: int, safe: str, data: bytes) -> Path:
+        """Write a new file under ``inbox/<day>/``. The agent can change the inbox, so no link
+        is followed and nothing that exists is overwritten (a second copy gets a number)."""
+        for n in range(1, 10):
+            name = f"{message_id}-{safe}" if n == 1 else f"{message_id}-{n}-{safe}"
+            with contextlib.suppress(FileExistsError):
+                return create_file_under(self.inbox_dir, (day,), name, data)
+        raise FileRefused(f"{self.inbox_dir.name}/{day}/{message_id}-{safe} exists already")

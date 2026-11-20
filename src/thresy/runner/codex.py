@@ -7,7 +7,7 @@ reference) and the JSONL event definitions in the openai/codex repository
 
 Command line (prompt on stdin via "-", working directory = RunRequest.cwd):
 
-    codex exec --json --skip-git-repo-check --cd <cwd>
+    codex exec --json --skip-git-repo-check --cd <cwd> -c features.memories=false
           [--model <model>]
           --dangerously-bypass-approvals-and-sandbox
           [extra args]
@@ -165,6 +165,9 @@ class CodexRunner(CliRunner):
 
     def build_invocation(self, req: RunRequest, binary: str, model: str | None) -> Invocation:
         argv = [binary, "exec", "--json", "--skip-git-repo-check", "--cd", str(req.cwd)]
+        # Memories are off by default, but the agent's config.toml could turn them on; memory
+        # is the workspace's memory/ files. A -c override outranks every config file.
+        argv += ["-c", "features.memories=false"]
         if model:
             argv += ["--model", model]
         argv += [*self.permission_args, *self.config.extra_args]

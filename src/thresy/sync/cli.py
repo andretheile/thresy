@@ -59,7 +59,15 @@ def _database(json_out: bool) -> Iterator[Any]:
     except (ConfigError, psycopg.OperationalError) as exc:
         raise fail(f"database: {exc}", as_json=json_out) from exc
     with conn:
-        yield conn
+        try:
+            yield conn
+        except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn) as exc:
+            # An unmigrated (or partly migrated) database: one line instead of a traceback.
+            detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+            raise fail(
+                f"database is not migrated ({detail}); run `coach db migrate`",
+                as_json=json_out,
+            ) from exc
 
 
 @contextlib.contextmanager

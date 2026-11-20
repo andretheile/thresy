@@ -11,9 +11,11 @@ that were delivered are never sent again after a restart.
 * A transient failure (network, flood control) stops the pass so the order is kept; the row is
   retried with backoff, and marked failed after ``COACH_BRIDGE_SEND_ATTEMPTS`` attempts.
 
-Rows can also be written by the agent with plain SQL, so everything is checked again here:
-files must resolve to a path under the workspace's ``out/``, and the transport refuses chats
-that are not allow-listed.
+Rows can also be written by the agent with plain SQL, so everything is checked again here,
+and the transport refuses chats that are not allow-listed. Files must lie under the
+workspace's ``out/``. The agent can swap a file for a link at any moment, so the bridge reads
+it exactly once, without following links anywhere on the way (:func:`read_outbox_file`), and
+hands the transport the bytes it read, never the path to read again.
 """
 
 from __future__ import annotations
@@ -25,15 +27,18 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from thresy.tools.send import SendError, check_file
+from thresy.tools.send import OUT_DIR_NAME
 from thresy.transport.base import (
     MAX_CHOICE_OPTIONS,
+    MAX_DOCUMENT_BYTES,
     MAX_OPTION_LENGTH,
+    MAX_PHOTO_BYTES,
     OUTBOUND_KINDS,
     DeliveryError,
     OutboundItem,
     Transport,
 )
+from thresy.transport.files import FileRefused, read_file_under
 
 from .clock import Clock
 from .repo import Repo, Row
@@ -42,6 +47,31 @@ from .settings import BridgeSettings
 log = logging.getLogger(__name__)
 
 MAX_BACKOFF_S = 300.0
+
+
+def read_outbox_file(raw: str, workspace: Path, *, kind: str) -> tuple[Path, bytes]:
+    """The path (as named) and content of an outbox file, or a permanent DeliveryError.
+
+    ``raw`` is the row's ``file_path``: absolute, or relative to ``workspace``. It must name a
+    file below ``<workspace>/out/`` without ``..``; it is opened component by component with
+    ``O_NOFOLLOW`` and checked on the open file (see :func:`read_file_under`).
+    """
+    root = workspace / OUT_DIR_NAME
+    path = Path(raw)
+    if not path.is_absolute():
+        path = workspace / path
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = ()
+    if not parts or ".." in parts:
+        raise DeliveryError(f"{kind} files must be under {root}/ (got {raw})", permanent=True)
+    limit = MAX_PHOTO_BYTES if kind == "photo" else MAX_DOCUMENT_BYTES
+    try:
+        data = read_file_under(root, parts, max_bytes=limit)
+    except FileRefused as exc:
+        raise DeliveryError(f"refused: {exc}", permanent=True) from exc
+    return path, data
 
 
 class OutboxDeliverer:
@@ -99,7 +129,7 @@ class OutboxDeliverer:
     def _chat_for(self, row: Row) -> str | None:
         return row.get("chat_id") or row.get("run_chat_id") or self.transport.default_chat_id
 
-    def _item(self, row: Row, chat_id: str) -> OutboundItem:
+    async def _item(self, row: Row, chat_id: str) -> OutboundItem:
         kind = row["kind"]
         if kind not in OUTBOUND_KINDS:
             raise DeliveryError(f"unknown kind {kind!r}", permanent=True)
@@ -107,15 +137,13 @@ class OutboxDeliverer:
         if kind in ("text", "choice") and not (text or "").strip():
             raise DeliveryError("empty text", permanent=True)
         file_path: Path | None = None
+        data: bytes | None = None
         if kind in ("photo", "document"):
             if not row.get("file_path"):
                 raise DeliveryError("no file_path", permanent=True)
-            try:
-                file_path = check_file(
-                    row["file_path"], self.workspace, kind=kind, cwd=self.workspace
-                )
-            except SendError as exc:
-                raise DeliveryError(str(exc), permanent=True) from exc
+            file_path, data = await asyncio.to_thread(
+                read_outbox_file, row["file_path"], self.workspace, kind=kind
+            )
         options: tuple[str, ...] = ()
         if kind == "choice":
             raw = row.get("options")
@@ -131,6 +159,7 @@ class OutboxDeliverer:
             kind=kind,
             text=text,
             file_path=file_path,
+            data=data,
             options=options,
             ref=str(row["id"]),
         )
@@ -142,7 +171,7 @@ class OutboxDeliverer:
         try:
             if not chat_id:
                 raise DeliveryError("no chat to deliver to", permanent=True)
-            item = self._item(row, chat_id)
+            item = await self._item(row, chat_id)
             message_id = await self.transport.send(item)
         except DeliveryError as exc:
             return await self._failure(row_id, str(exc), exc.permanent, exc.retry_after_s)

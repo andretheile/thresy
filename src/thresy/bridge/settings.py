@@ -130,6 +130,11 @@ class BridgeSettings(BaseSettings):
     bridge_shutdown_grace_s: float = 20
     """On SIGTERM: how long to wait for a cancelled run to wind down and the outbox to flush."""
 
+    home_location: str | None = None
+    """``COACH_HOME_LOCATION``, where the athlete usually runs: not used by the bridge itself
+    but handed to the agent for ``coach weather`` (``thresy.tools.weather.WeatherSettings``).
+    Empty counts as unset."""
+
     @field_validator(
         "bridge_briefing_fallback", "bridge_briefing_latest", "bridge_night_end_earliest"
     )

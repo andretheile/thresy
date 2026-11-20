@@ -95,6 +95,8 @@ def test_command_line_new_session(tmp_path):
         "--skip-git-repo-check",
         "--cd",
         str(tmp_path),
+        "-c",
+        "features.memories=false",
         "--dangerously-bypass-approvals-and-sandbox",
         "-",
     ]
@@ -118,6 +120,8 @@ def test_command_line_resume_with_instructions(tmp_path):
         "--skip-git-repo-check",
         "--cd",
         str(tmp_path),
+        "-c",
+        "features.memories=false",
         "--model",
         "gpt-fast",
         "--dangerously-bypass-approvals-and-sandbox",

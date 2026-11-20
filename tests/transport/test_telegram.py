@@ -34,9 +34,8 @@ class FakeFile:
     def __init__(self, data: bytes) -> None:
         self.data = data
 
-    async def download_to_drive(self, custom_path: Path) -> Path:
-        Path(custom_path).write_bytes(self.data)
-        return Path(custom_path)
+    async def download_as_bytearray(self) -> bytearray:
+        return bytearray(self.data)
 
 
 class FakeBot:
@@ -142,11 +141,10 @@ def test_choice_has_buttons_on_the_last_chunk(transport, bot) -> None:
 
 
 def test_photo_with_caption_and_fallbacks(transport, bot, tmp_path) -> None:
-    plot = tmp_path / "plot.png"
-    plot.write_bytes(PNG)
+    plot = tmp_path / "plot.png"  # never opened: the transport sends the bytes it is given
     run(
         transport.send(
-            OutboundItem(chat_id=CHAT, kind="photo", text="**HR** zones", file_path=plot)
+            OutboundItem(chat_id=CHAT, kind="photo", text="**HR** zones", file_path=plot, data=PNG)
         )
     )
     (photo,) = bot.named("send_photo")
@@ -154,21 +152,26 @@ def test_photo_with_caption_and_fallbacks(transport, bot, tmp_path) -> None:
     assert photo["caption"] == "HR zones" and photo["caption_entities"][0].type == "bold"
 
     long_caption = "word " * 400
-    run(transport.send(OutboundItem(chat_id=CHAT, kind="photo", text=long_caption, file_path=plot)))
+    item = OutboundItem(chat_id=CHAT, kind="photo", text=long_caption, file_path=plot, data=PNG)
+    run(transport.send(item))
     assert "caption" not in bot.named("send_photo")[-1]
     assert bot.named("send_message")[-1]["text"] == long_caption.strip()
 
     bot.fail("send_photo", BadRequest("PHOTO_INVALID_DIMENSIONS"))
-    ids = run(transport.send(OutboundItem(chat_id=CHAT, kind="photo", file_path=plot)))
+    ids = run(transport.send(OutboundItem(chat_id=CHAT, kind="photo", file_path=plot, data=PNG)))
     assert bot.named("send_document")[-1]["document"] == PNG
     assert ids == str(bot.next_id)
 
 
-def test_file_problems_are_permanent(transport, tmp_path) -> None:
-    missing = OutboundItem(chat_id=CHAT, kind="document", file_path=tmp_path / "nope.csv")
+def test_file_problems_are_permanent(transport, bot, tmp_path) -> None:
+    # A path alone is not enough: the transport never reads a file the agent could swap.
+    secret = tmp_path / "secret.csv"
+    secret.write_text("do not send")
+    path_only = OutboundItem(chat_id=CHAT, kind="document", file_path=secret)
     with pytest.raises(DeliveryError) as info:
-        run(transport.send(missing))
-    assert info.value.permanent and "cannot read" in str(info.value)
+        run(transport.send(path_only))
+    assert info.value.permanent and "no file content" in str(info.value)
+    assert bot.named("send_document") == []
     with pytest.raises(DeliveryError) as info:
         run(transport.send(OutboundItem(chat_id="999", kind="text", text="hi")))
     assert info.value.permanent and "not allow-listed" in str(info.value)
@@ -294,6 +297,32 @@ def test_photo_voice_document_are_saved(transport, bot, tmp_path) -> None:
     assert huge_msg.attachments[0].path is None
     assert "20 MB" in (huge_msg.attachments[0].error or "")
     assert [kw["file_id"] for kw in bot.named("get_file")] == ["big", "v1", "d1"]
+
+
+def test_saving_never_follows_links_the_agent_planted(transport, bot, tmp_path) -> None:
+    received = collect(transport)
+    victim = tmp_path / "bridge-home-file"
+    victim.write_text("bridge only")
+    day = tmp_path / "inbox" / "2030-01-02"
+    day.mkdir(parents=True)
+    (day / "10-photo.jpg").symlink_to(victim)  # the name the next photo would get
+    photo = [{"file_id": "p", "file_unique_id": "p", "width": 9, "height": 9, "file_size": 9}]
+    run(transport.handle_update(update(bot, photo=photo)))
+    assert victim.read_text() == "bridge only"
+    assert received[0].attachments[0].path == day / "10-2-photo.jpg"
+    assert (day / "10-2-photo.jpg").read_bytes() == b"content of p"
+
+    # The whole day directory replaced by a link: nothing is saved, the agent hears why.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for name in ("10-photo.jpg", "10-2-photo.jpg"):
+        (day / name).unlink()
+    day.rmdir()
+    day.symlink_to(elsewhere)
+    run(transport.handle_update(update(bot, message_id=11, photo=photo)))
+    attachment = received[1].attachments[0]
+    assert attachment.path is None and "symbolic link" in (attachment.error or "")
+    assert list(elsewhere.iterdir()) == []
 
 
 def test_unsupported_messages_are_ignored(transport, bot) -> None:
