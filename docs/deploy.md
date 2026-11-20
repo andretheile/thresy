@@ -10,7 +10,7 @@ Telegram, the model provider, optionally a backup bucket).
 | `migrate` | applies database migrations, then exits | the read/write database URL |
 | `sync` | polls Garmin, stores data, raises events | Garmin login and session, FIT files (read/write) |
 | `bridge` | Telegram chat, starts the coding agent | Telegram token, the coach workspace, the agent's home, FIT files (read-only) |
-| `backup` | nightly backup | the backup key, read-only FIT files and workspace |
+| `backup` | scheduled backup (nightly, or on chosen weekdays) | the backup key, read-only FIT files and workspace |
 
 Inside `bridge` the coding agent runs as its own Unix user (`agent`), not as the bridge's
 (`coach`): it cannot read the bridge's environment or files, and its model credential lives in a
@@ -202,8 +202,13 @@ docker compose run --rm --no-deps bridge coach runner check
 # OK   claude: claude 2.1.311: auth ok: logged in via oauth_token; token validity is only checked by a model request
 ```
 
-To renew the token, repeat both commands (the file is replaced). The runner logs a warning when
-the token expires within three days.
+To renew the token, repeat both commands (the file is replaced).
+
+The CLI does not report when such a token ends, so tell the bridge: set
+`COACH_BRIDGE_CREDENTIAL_EXPIRES` in `.env` to the date one year after you created the token
+(for example `2027-11-20`), and update it whenever you renew. The bridge then tells the athlete
+in the chat three weeks before, and again as the date comes closer (docs/bridge.md); `/status`
+shows the date.
 
 **Codex**: `CODEX_API_KEY=<key>` in the same file, or log in as the agent with
 `docker compose run --rm --no-deps --user agent bridge codex login --device-auth` (stores
@@ -256,8 +261,9 @@ docker compose logs -f bridge sync        # Ctrl+C to stop following
 
 ## 13. Backups
 
-Without further settings the `backup` service writes a nightly backup into the `backups` volume
-on the same server, which helps after a mistake but not after losing the server. For off-site,
+Without further settings the `backup` service writes a backup every night into the `backups`
+volume on the same server, which helps after a mistake but not after losing the server. To run
+it on chosen weekdays only, set `COACH_BACKUP_WEEKDAYS` (for example `mon`). For off-site,
 encrypted backups follow docs/backup.md ("Setting up the bucket", "Encryption with age"); in
 short:
 

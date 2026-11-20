@@ -347,6 +347,7 @@ class RunResult:
     duration_s: float
     runner: str
     model: str | None
+    credential_expires_at: datetime | None = None   # set only when the harness reports when its credential ends
 
 class AgentRunner(Protocol):
     name: str
@@ -442,4 +443,5 @@ Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat mess
 - Logs never contain secrets. Log with the standard `logging` module and never configure it yourself: `coach` does that once (`thresy.logs`: no request logging of HTTP clients, every record redacted). Register a secret that does not come from the environment with `thresy.logs.register_secret`, and pass error texts that leave the process another way (stored in the database, sent to the chat) through `thresy.logs.redact` (docs/deploy.md, "Logs and secrets").
 - The development Mac has about 6 GB of free disk. Do not build the app image locally, do not pull large images, and do not run the full legacy import locally (use `--limit`).
 - Every package ships tests, and `uv run ruff check` and `uv run pytest` pass before you report.
+- CI (`.github/workflows/ci.yml`, owned by the foundation package) runs lint, the whole suite, the Linux-only isolation and backup tests and an image build on every push and pull request. It uses no secrets and must never reach Garmin, Telegram or a model provider.
 - Report honestly: what you verified by running it, what you could not verify, and every deviation from this document.

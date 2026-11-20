@@ -1,5 +1,7 @@
 # Thresy
 
+[![CI](https://github.com/andretheile/thresy/actions/workflows/ci.yml/badge.svg)](https://github.com/andretheile/thresy/actions/workflows/ci.yml)
+
 A self-hosted running coach for one athlete. Thresy syncs your Garmin data (activities with
 per-second records, sleep, HRV, steps) into Postgres, and a coding agent (Claude Code, Codex
 or Cursor) answers your chat messages and sends a morning briefing and post-run debriefs by
