@@ -190,7 +190,9 @@ def test_hourly_window_and_explicit_dates(fake: FakeOpenMeteo, env: dict[str, st
     day = local_today() + timedelta(days=9)
     result = coach(["weather", "--date", day.isoformat(), "--hours", "11-13", "--days", "2"], env)
     assert result.exit_code == 0, result.output
-    hourly = result.output.split(f"Hourly, {day.strftime('%a %Y-%m-%d')}")[1].splitlines()
+    heading = f"Hourly, {day.strftime('%a %Y-%m-%d')}, 11:00 to 13:00"
+    assert heading in result.output
+    hourly = result.output.split(heading)[1].splitlines()
     rows = [line for line in hourly if line[:2].isdigit()]
     assert [r[:5] for r in rows] == ["11:00", "12:00", "13:00"]
     assert "light rain" in rows[1] and "0.5" in rows[1]

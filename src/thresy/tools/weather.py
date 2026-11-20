@@ -345,7 +345,10 @@ def format_text(
     if place.alternatives:
         lines.append("Other places with this name: " + "; ".join(place.alternatives))
     if daily:
-        lines += ["", "Daily"]
+        lines += [
+            "",
+            "Daily (whole days, today's hours already past included; plan with the hourly rows)",
+        ]
         rows = []
         for r in daily:
             day = date.fromisoformat(r["time"])
@@ -367,10 +370,11 @@ def format_text(
         header = ["day", "weather", "min/max °C", "rain mm", "rain %", "rain h"]
         lines += _table([*header, "wind/gust km/h", "daylight"], rows)
     for day, rows_of_day in hourly_days:
-        lines += ["", f"Hourly, {day.strftime('%a %Y-%m-%d')}"]
+        title = f"Hourly, {day.strftime('%a %Y-%m-%d')}"
         if not rows_of_day:
-            lines.append("(no hours in the selected window)")
+            lines += ["", title, "(no hours left in the selected window)"]
             continue
+        lines += ["", f"{title}, {rows_of_day[0]['time'][-5:]} to {rows_of_day[-1]['time'][-5:]}"]
         rows = [
             [
                 r["time"][-5:],
