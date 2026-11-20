@@ -32,6 +32,14 @@ class Tier(StrEnum):
     smart = "smart"
 
 
+class EffortLevel(StrEnum):  # thresy.runner.EFFORTS
+    low = "low"
+    medium = "medium"
+    high = "high"
+    xhigh = "xhigh"
+    max = "max"
+
+
 def _environ() -> dict[str, str]:
     """The environment, with a .env file in the current directory filling gaps (like the
     project's other settings)."""
@@ -104,6 +112,14 @@ def run(
         str | None, typer.Option("--resume", help="Harness session id to resume.")
     ] = None,
     tier: Annotated[Tier, typer.Option("--tier", help="Model tier.")] = Tier.smart,
+    effort: Annotated[
+        EffortLevel | None,
+        typer.Option(
+            "--effort",
+            help="Reasoning effort (default: the harness's own). Ignored by runners without "
+            "an effort setting (cursor).",
+        ),
+    ] = None,
     timeout: Annotated[float, typer.Option("--timeout", help="Seconds.")] = 900.0,
     system_append: Annotated[
         str | None, typer.Option("--system-append", help="Extra system instructions.")
@@ -127,6 +143,7 @@ def run(
             tier=tier.value,
             timeout=timeout,
             system_append=system_append,
+            effort=effort.value if effort else None,
         )
     except ValueError as exc:
         raise fail(str(exc), as_json=json_out, code=2) from exc

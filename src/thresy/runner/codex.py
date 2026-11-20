@@ -8,13 +8,18 @@ reference) and the JSONL event definitions in the openai/codex repository
 Command line (prompt on stdin via "-", working directory = RunRequest.cwd):
 
     codex exec --json --skip-git-repo-check --cd <cwd> -c features.memories=false
-          [--model <model>]
+          [-c model_reasoning_effort="<level>"] [--model <model>]
           --dangerously-bypass-approvals-and-sandbox
           [extra args]
           [resume <session_id>] -
 
 All exec options come before the `resume` subcommand because some of them
 (--cd, --sandbox) are not global options of `codex exec`.
+
+RunRequest.effort becomes the `model_reasoning_effort` setting (documented values
+low, medium, high, xhigh, max, ultra; "available levels depend on the model").
+What Codex does with a level the model lacks is not documented, so the shared
+runner retries a run that fails before any output once without it.
 
 RunRequest.system_append is prepended to the stdin prompt. Codex's
 `developer_instructions` setting can only be given as a `-c` argument (visible
@@ -153,7 +158,10 @@ class CodexStreamParser(StreamParser):
 class CodexRunner(CliRunner):
     name = "codex"
     capabilities = RunnerCapabilities(
-        supports_resume=True, supports_streaming=True, supports_system_append=False
+        supports_resume=True,
+        supports_streaming=True,
+        supports_system_append=False,
+        supports_effort=True,
     )
     default_binaries = ("codex",)
     default_models: Mapping[str, str | None] = {}  # the CLI's configured default
@@ -168,6 +176,8 @@ class CodexRunner(CliRunner):
         # Memories are off by default, but the agent's config.toml could turn them on; memory
         # is the workspace's memory/ files. A -c override outranks every config file.
         argv += ["-c", "features.memories=false"]
+        if req.effort:  # -c values are TOML: a quoted string
+            argv += ["-c", f'model_reasoning_effort="{req.effort}"']
         if model:
             argv += ["--model", model]
         argv += [*self.permission_args, *self.config.extra_args]

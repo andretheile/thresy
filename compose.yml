@@ -210,6 +210,8 @@ services:
       COACH_BRIDGE_RUN_TIMEOUT_S:
       COACH_BRIDGE_CHAT_TIER:
       COACH_BRIDGE_PROACTIVE_TIER:
+      COACH_BRIDGE_CHAT_EFFORT:
+      COACH_BRIDGE_PROACTIVE_EFFORT:
       COACH_BRIDGE_CONTEXT_MESSAGES:
       COACH_BRIDGE_CONTEXT_CHARS:
       COACH_BRIDGE_CONTEXT_HOURS:
@@ -225,9 +227,9 @@ services:
       - agent-home:/home/agent
     mem_limit: ${BRIDGE_MEM_LIMIT:-1536m}
 
-  # Nightly backup (docs/backup.md): database dump, the workspace's memory/ and new FIT files to
-  # COACH_BACKUP_URL. The only service with the backup credential. Reads FIT files and the
-  # workspace, writes nothing to them.
+  # Nightly backup (docs/backup.md): database dump, the workspace's memory/ and scripts/ and new
+  # FIT files to COACH_BACKUP_URL. The only service with the backup credential. Reads FIT files
+  # and the workspace, writes nothing to them.
   backup:
     <<: *app
     command: ["coach", "backup", "schedule"]

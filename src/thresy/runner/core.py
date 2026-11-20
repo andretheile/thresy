@@ -14,8 +14,12 @@ if TYPE_CHECKING:
     from .handle import RunHandle
 
 ModelTier = Literal["fast", "smart"]
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 ErrorKind = Literal["rate_limit", "auth", "timeout", "crash", "cancelled", "other"]
 ProgressKind = Literal["text", "tool"]
+
+EFFORTS: tuple[Effort, ...] = ("low", "medium", "high", "xhigh", "max")
+"""Reasoning-effort levels, lowest first."""
 
 ERROR_KINDS: tuple[ErrorKind, ...] = (
     "rate_limit",
@@ -42,6 +46,23 @@ class RunRequest:
     system_append: str | None = None
     """Extra system instructions; prepended to the prompt if the harness has no
     such option (see RunnerCapabilities.supports_system_append)."""
+    effort: Effort | None = None
+    """Reasoning-effort hint; None: the harness's (or model's) default. Each adapter
+    maps it to its CLI's own setting; one without such a setting ignores it (see
+    RunnerCapabilities.supports_effort). A level the model does not support never
+    fails the run (docs/runners.md, "Reasoning effort")."""
+
+
+def parse_effort(value: str | None) -> Effort | None:
+    """An effort level from configuration or a command line: one of EFFORTS (any case);
+    None or empty mean the harness's default. Raises ValueError otherwise."""
+    if value is None or not value.strip():
+        return None
+    level = value.strip().lower()
+    for known in EFFORTS:
+        if level == known:
+            return known
+    raise ValueError(f"unknown effort level {value!r}; expected one of {', '.join(EFFORTS)}")
 
 
 @dataclass(frozen=True)
@@ -100,6 +121,8 @@ class RunnerCapabilities:
     supports_resume: bool
     supports_streaming: bool
     supports_system_append: bool
+    supports_effort: bool = False
+    """Whether RunRequest.effort reaches the harness; False: the hint is ignored."""
 
 
 @dataclass(frozen=True)

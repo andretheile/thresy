@@ -8,12 +8,14 @@ codex-rs/exec/src/exec_events.rs.
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 from pathlib import Path
 
-from thresy.runner import HarnessConfig, Progress, Started
+from thresy.runner import EFFORTS, HarnessConfig, Progress, Started
 from thresy.runner.codex import CodexRunner, CodexStreamParser
 
-from .runner_testkit import exit_info, fixture_lines, parse, request
+from .runner_testkit import exit_info, fixture_lines, parse, request, run_collect
 
 
 def parser(tmp_path: Path, **kw) -> CodexStreamParser:
@@ -174,3 +176,55 @@ def test_healthcheck_logged_out(tmp_path):
     script.chmod(0o755)
     health = asyncio.run(CodexRunner(HarnessConfig(binary=str(script))).healthcheck())
     assert health.auth_ok is False and not health.ok
+
+
+# -- reasoning effort -----------------------------------------------------------------
+
+
+def test_command_line_effort(tmp_path):
+    runner = CodexRunner()
+    assert runner.capabilities.supports_effort
+    for level in EFFORTS:
+        argv = runner.build_invocation(
+            request(tmp_path, effort=level, session_id="t-9"), "codex", None
+        ).argv
+        # A TOML string for the documented setting, before `resume` like every option.
+        at = argv.index(f'model_reasoning_effort="{level}"')
+        assert argv[at - 1] == "-c" and at < argv.index("resume")
+    plain = runner.build_invocation(request(tmp_path), "codex", None).argv
+    assert not any("reasoning" in arg for arg in plain)
+
+
+_PICKY_CODEX = """\
+#!{python}
+# Records every call; fails the turn like a model without the requested effort level.
+import json, sys
+
+with open({log!r}, "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.stdin.read()
+if any(arg.startswith("model_reasoning_effort=") for arg in sys.argv):
+    print(json.dumps({{"type": "thread.started", "thread_id": "t-1"}}))
+    error = {{"message": "Unsupported value: 'max' is not supported with this model."}}
+    print(json.dumps({{"type": "turn.failed", "error": error}}))
+    sys.exit(1)
+print(json.dumps({{"type": "thread.started", "thread_id": "t-2"}}))
+item = {{"id": "i1", "type": "agent_message", "text": "Fertig."}}
+print(json.dumps({{"type": "item.completed", "item": item}}))
+print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 3, "output_tokens": 2}}}}))
+"""
+
+
+def test_a_level_the_model_rejects_is_retried_without_it(tmp_path):
+    log = tmp_path / "calls.jsonl"
+    cli = tmp_path / "picky-codex"
+    cli.write_text(_PICKY_CODEX.format(python=sys.executable, log=str(log)))
+    cli.chmod(0o755)
+    runner = CodexRunner(HarnessConfig(binary=str(cli)))
+    events, result = run_collect(runner.run(request(tmp_path, effort="max", timeout_s=60)))
+    assert result.ok and result.text == "Fertig."
+    assert result.session_id == "t-2"  # the thread that answered, for the next resume
+    assert [e for e in events if isinstance(e, Started)] == [Started("t-1")]
+    first, second = (json.loads(line) for line in log.read_text().splitlines())
+    assert 'model_reasoning_effort="max"' in first
+    assert not any("reasoning" in arg for arg in second)

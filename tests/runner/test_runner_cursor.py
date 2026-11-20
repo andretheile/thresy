@@ -13,7 +13,16 @@ from thresy.runner import HarnessConfig, Progress, Started
 from thresy.runner.cli_base import prepend_system
 from thresy.runner.cursor import PROMPT_ON_COMMAND_LINE, CursorRunner, CursorStreamParser
 
-from .runner_testkit import exit_info, fixture_lines, parse, request
+from .runner_testkit import (
+    exit_info,
+    fixture_lines,
+    parse,
+    read_json,
+    request,
+    run_collect,
+    spec_env,
+    write_fake_cli,
+)
 
 SESSION = "c6b62c6f-7ead-4fd6-9922-e952131177ff"
 
@@ -137,3 +146,16 @@ def test_result_is_terminal(tmp_path):
     assert not p.terminal_seen
     p.feed_line(lines[-1])
     assert p.terminal_seen
+
+
+def test_effort_is_ignored(tmp_path):
+    """The Cursor CLI documents no effort setting: the hint never reaches it."""
+    assert not CursorRunner.capabilities.supports_effort
+    record = tmp_path / "record.json"
+    fixture = Path(__file__).parent / "fixtures/cursor/cursor_docs_sequence.jsonl"
+    env = spec_env(record=str(record), steps=[{"out_file": str(fixture)}])
+    runner = CursorRunner(HarnessConfig(binary=str(write_fake_cli(tmp_path)), env=env))
+    _, result = run_collect(runner.run(request(tmp_path, prompt="Hi", effort="max")))
+    assert result.ok
+    plain = runner.build_invocation(request(tmp_path, prompt="Hi"), "x", None).argv
+    assert read_json(record)["argv"] == plain[1:]

@@ -1,6 +1,6 @@
-"""Backups: a Postgres dump, the original FIT files and the coach's memory files, written to a
-local directory or a Google Cloud Storage bucket with a create-only credential, optionally
-encrypted with age. See docs/backup.md.
+"""Backups: a Postgres dump, the original FIT files and the coach's memory files and kept
+scripts, written to a local directory or a Google Cloud Storage bucket with a create-only
+credential, optionally encrypted with age. See docs/backup.md.
 """
 
 from .core import (

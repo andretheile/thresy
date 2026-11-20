@@ -30,7 +30,7 @@ D = date(2030, 1, 2)
 
 @pytest.fixture
 def data(conn, tmp_path: Path) -> dict[str, Path]:
-    """Synthetic rows, two FIT files and a workspace with memory files."""
+    """Synthetic rows, two FIT files and a workspace with memory files and kept scripts."""
     store.upsert_activity(conn, synthetic.activity(1001), source="test")
     store.upsert_activity(conn, synthetic.activity(1002), source="test")
     store.upsert_wellness(conn, D, sleep=synthetic.sleep(D), hrv=synthetic.hrv(D))
@@ -45,6 +45,10 @@ def data(conn, tmp_path: Path) -> dict[str, Path]:
     (workspace / "memory" / "profile.md").write_text("# Profile\nsynthetic athlete\n")
     (workspace / "memory" / "notes" / "2030-01.md").write_text("a note\n")
     (workspace / "memory" / "link.md").symlink_to(workspace / "memory" / "profile.md")
+    (workspace / "scripts").mkdir()
+    (workspace / "scripts" / "climb.py").write_text('"""A synthetic question?"""\n')
+    (workspace / "scripts" / "_shared.py").write_text("X = 1\n")
+    (workspace / "scripts" / "linked.py").symlink_to(workspace / "memory" / "profile.md")
     (workspace / "AGENTS.md").write_text("not backed up\n")
     return {"data": data_dir, "workspace": workspace, "target": tmp_path / "target"}
 
@@ -87,6 +91,7 @@ def test_backup_to_a_local_directory(conn, test_db, data, fake_pg):
     assert set(stored) == {
         prefix + "thresy.dump",
         prefix + "memory.tar.gz",
+        prefix + "scripts.tar.gz",
         prefix + "manifest.json",
         "fit/2030/1001.fit",
         "fit/2030/1002.fit",
@@ -96,6 +101,10 @@ def test_backup_to_a_local_directory(conn, test_db, data, fake_pg):
     with tarfile.open(fileobj=io.BytesIO(stored[prefix + "memory.tar.gz"])) as archive:
         names = sorted(archive.getnames())
     assert names == ["memory", "memory/notes", "memory/notes/2030-01.md", "memory/profile.md"]
+    with tarfile.open(fileobj=io.BytesIO(stored[prefix + "scripts.tar.gz"])) as archive:
+        names = sorted(archive.getnames())  # the link is skipped, never followed
+    assert names == ["scripts", "scripts/_shared.py", "scripts/climb.py"]
+    assert result.scripts_files == 2 and "kept scripts: 2" in result.text()
 
     manifest = json.loads(stored[prefix + "manifest.json"])
     assert manifest["run_id"] == result.run_id and manifest["encrypted"] is False
@@ -106,7 +115,9 @@ def test_backup_to_a_local_directory(conn, test_db, data, fake_pg):
     assert {o["name"] for o in manifest["objects"]} == {
         prefix + "thresy.dump",
         prefix + "memory.tar.gz",
+        prefix + "scripts.tar.gz",
     }
+    assert (manifest["memory_files"], manifest["scripts_files"]) == (2, 2)
     assert manifest["fit"] == {"uploaded": 2, "already_there": 0, "total": 2, "prefix": "fit/"}
 
     # pg_dump got the dumped snapshot and no secret on its command line.
@@ -118,6 +129,26 @@ def test_backup_to_a_local_directory(conn, test_db, data, fake_pg):
     status = core.get_status(conn)
     assert status["last_run_id"] == result.run_id and status["failures_in_row"] == 0
     assert status["last_result"]["fit_uploaded"] == 2
+    assert status["last_result"]["scripts_files"] == 2
+
+
+def test_memory_and_scripts_restore_into_a_new_workspace(conn, test_db, data, fake_pg, tmp_path):
+    """The restore steps of docs/backup.md: unpack both archives, import them with
+    ``coach workspace init --memory-from`` / ``--scripts-from``."""
+    from thresy.workspace import import_memory, import_scripts, init_workspace
+
+    result = run_backup(make_config(test_db, data, pg_bin_dir=fake_pg.bin_dir))
+    run = data["target"] / "runs" / result.run_id
+    unpacked = tmp_path / "restore"
+    for name in ("memory.tar.gz", "scripts.tar.gz"):
+        with tarfile.open(run / name) as archive:
+            archive.extractall(unpacked, filter="data")
+    fresh = tmp_path / "new-workspace"
+    init_workspace(fresh)  # the repository's template
+    import_memory(fresh, unpacked / "memory")
+    import_scripts(fresh, unpacked / "scripts")
+    for rel in ("memory/profile.md", "memory/notes/2030-01.md", "scripts/climb.py"):
+        assert (fresh / rel).read_bytes() == (data["workspace"] / rel).read_bytes()
 
 
 def test_fit_files_are_uploaded_once(conn, test_db, data, fake_pg):
@@ -172,6 +203,7 @@ def test_backup_to_gcs_creates_objects_only(conn, test_db, data, fake_pg, gcs):
             "thresy/fit/2030/1002.fit",
             f"thresy/runs/{result.run_id}/manifest.json",
             f"thresy/runs/{result.run_id}/memory.tar.gz",
+            f"thresy/runs/{result.run_id}/scripts.tar.gz",
             f"thresy/runs/{result.run_id}/thresy.dump",
         ]
     )
@@ -234,6 +266,30 @@ def test_missing_memory_is_a_warning(conn, test_db, data, fake_pg):
     assert any("no memory/" in w for w in result.warnings)
 
 
+def test_missing_scripts_is_no_warning(conn, test_db, data, fake_pg):
+    import shutil
+
+    shutil.rmtree(data["workspace"] / "scripts")
+    result = run_backup(make_config(test_db, data, pg_bin_dir=fake_pg.bin_dir))
+    assert result.ok and result.scripts_files == 0 and result.warnings == []
+    assert not any(name.endswith("scripts.tar.gz") for name in files(data["target"]))
+
+
+def test_a_linked_workspace_directory_is_never_followed(conn, test_db, data, fake_pg, tmp_path):
+    """The agent owns the workspace: a link must not make the backup read anything else."""
+    import shutil
+
+    secret = tmp_path / "secrets"
+    secret.mkdir()
+    (secret / "key.json").write_text("not for the backup\n")
+    shutil.rmtree(data["workspace"] / "scripts")
+    (data["workspace"] / "scripts").symlink_to(secret)
+    result = run_backup(make_config(test_db, data, pg_bin_dir=fake_pg.bin_dir))
+    assert result.ok and result.scripts_files == 0
+    assert any("scripts/ in the workspace is a link" in w for w in result.warnings)
+    assert all(b"not for the backup" not in blob for blob in files(data["target"]).values())
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")
 def test_unreadable_memory_file_fails_the_backup(conn, test_db, data, fake_pg):
     secret = data["workspace"] / "memory" / "profile.md"
@@ -269,11 +325,23 @@ def test_cli_status_and_run(conn, test_db, data, fake_pg, monkeypatch):
         assert json.loads(done.output)["fit_uploaded"] == 2
         after = runner.invoke(get_app(), ["backup", "status"])
         assert "last success: 20" in after.output and "2 new FIT files" in after.output
+        assert "2 memory files, 2 kept scripts, 2 new FIT files" in after.output
         monkeypatch.setenv("COACH_BACKUP_URL", "ftp://nowhere")
         bad = runner.invoke(get_app(), ["backup", "run"])
         assert bad.exit_code == 1 and "file:// or gs://" in bad.output
     finally:
         get_settings.cache_clear()
+
+
+def test_status_of_a_record_from_before_kept_scripts():
+    from thresy.backup.cli import _status_text
+
+    old = {
+        "last_success_at": "2030-01-02T03:30:00+00:00",
+        "last_run_id": "r1",
+        "last_result": {"objects": 3, "bytes": 2e6, "memory_files": 6, "fit_uploaded": 1},
+    }
+    assert "(run r1, 3 objects, 2.0 MB, 6 memory files, 1 new FIT files)" in _status_text(old)
 
 
 # -- real pg_dump and pg_restore ------------------------------------------------------------------

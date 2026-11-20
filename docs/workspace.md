@@ -15,19 +15,23 @@ playbooks/
   week-plan.md       planning a week or block                  read on demand
   race-prep.md       deciding, preparing, racing, recovering   read on demand
   onboarding.md      a new athlete with empty memory           read on demand
+  scripts.md         writing and keeping analysis scripts      read on demand
 memory/              athlete.md, places.md, fitness.md, preferences.md, goals.md, journal.md
+scripts/             analysis scripts the coach keeps (see "Kept analysis scripts")
 out/                 files the agent makes (plots); `coach send` accepts files only from here
 inbox/<date>/        files the athlete sent (the bridge writes them)
 ```
 
-`out/` and `inbox/` are created by the bridge at start, so the template does not ship them.
+`out/`, `inbox/` and `scripts/` are created empty by `coach workspace init` whenever they are
+missing (the bridge also creates `out/` and `inbox/` at start), so the template does not ship
+them.
 
 ## Who reads what
 
 - **`AGENTS.md`** is in the context of every run on every harness (Claude Code through the
   `CLAUDE.md` import, Codex and Cursor natively). Its length is paid on every run, so it holds
   only what every run needs: the situation, how the coach knows things, the judgment calls that
-  go wrong, how it talks, the bridge mechanics, memory and limits (about 2,200 words now). It
+  go wrong, how it talks, the bridge mechanics, memory and limits (about 2,300 words now). It
   explains reasons rather than issuing bare rules, so the coach can apply them to cases they do
   not name.
 - **Playbooks** are read when a prompt names one (`Follow playbooks/chat.md.`) or when the brief
@@ -71,6 +75,71 @@ tool-output limit, which happened in a trial run); sessions, dates and results g
 
 Memory is plain files so it survives a harness switch and is part of the backup. Harness memory
 features must stay unused; see "Findings for the deployment" below.
+
+## Kept analysis scripts
+
+For questions no `coach analysis` command answers (a climb's history with its own definition,
+the reps of one session with breathing rate, a course this year against last year), the coach
+writes Python against `thresy.analysis` and the database. Written once and deleted, every such
+script starts from nothing in the next session, which may count slightly differently and give
+slightly different numbers. So the coach keeps the scripts worth reusing in `scripts/`, and its
+own evaluation tools accumulate.
+
+- **The convention** is in `playbooks/scripts.md`, read on demand; the brief only points there
+  (about 70 words: look before writing, keep what will be asked again). Keep a script
+  when its question will probably come again; one question, one script; fix or replace a wrong
+  script in place instead of keeping two versions, and correct what was said from it.
+- **Quality, because later sessions trust a script they did not write:** it reads through the
+  read-only URL (`thresy.db.connect_ro`, `COACH_DATABASE_URL_RO`), takes ids, dates and keys as
+  arguments, prints what data it covered, uses the analysis functions instead of re-deriving
+  pauses or the heart-rate check, and is run once more after saving to confirm it reproduces
+  the answer just given.
+- **The header** (a docstring, or a comment block for shell and SQL) says what question the
+  script answers (first line), how to call it (`Usage:`), what its numbers mean (`Output:`),
+  and, for a candidate, `Candidate:` (below).
+- **The index is generated, not maintained.** `coach workspace scripts` (`--json` too) reads the
+  headers on every call and prints one entry per script: the question, the usage line, a
+  candidate note, and problems (no header, no `Usage:` line, does not parse as Python, a link).
+  A list the coach kept by hand would drift: a session that saves a script and forgets the list
+  makes it invisible, and the next one writes a second version. The header is needed anyway, so
+  the index costs the coach nothing to keep and one short command to read; it is read when a
+  question needs a script, not every session. Files starting with `_` are shared helper modules
+  and `.` files are ignored; nothing is executed.
+- **`coach workspace init`** creates `scripts/` empty when it is missing, on the first start and
+  on every later one, and never writes into it; a workspace that holds only `scripts/` is not
+  treated as empty, so the template is never seeded over kept scripts. The template ships no file
+  in `scripts/`: a file seeded there would belong to the agent and could never be updated, so
+  the convention lives in the playbook, which the template keeps current.
+- **Backups** include `scripts/` as `scripts.tar.gz` next to `memory.tar.gz` (docs/backup.md);
+  links are skipped there as in `memory/`, and the index reports them.
+
+### From kept script to built-in command
+
+A script that keeps proving useful shows that a `coach analysis` command is missing. It gets
+into the repository through normal development, never through the agent, which cannot write the
+installed code (`/app` is not writable for the agent user) and has no repository credentials:
+
+1. When a kept script would help other athletes too, the coach marks it as a candidate with one
+   header line, `Candidate: <what it would offer as a general command>; specific to this athlete:
+   <what is still tied to them>`, which the index shows. The first time, it tells the athlete in
+   one sentence that the script could become a built-in command and that they can propose it;
+   it does not repeat that on later uses.
+2. The owner takes the script from the workspace (`docker compose exec bridge cat
+   /workspace/scripts/<name>.py`) or from a backup's `scripts.tar.gz`, and proposes it.
+3. A developer rewrites it as a function in `thresy.analysis` with a `coach analysis`
+   subcommand: inputs as arguments, nothing from the athlete (places, coordinates, ids, paces,
+   heart rates; also in comments), tests on synthetic fixtures, a section in docs/analysis.md and
+   a row in the brief's command table, then the usual review, including a check for personal
+   data.
+4. After the upgrade the brief lists the command, and the playbook tells the coach to use it and
+   delete its own script.
+
+Why the agent has no push access, not even for pull requests: it is the least trusted part of
+the system (it has a shell, reads the web and runs on untrusted input); its scripts are written
+against one athlete's private data, so names of places, coordinates, activity ids or paces can
+end up in code or comments; anything published to a public repository cannot be taken back; and
+code it pushed would run on the trusted side (the services, the image) after the next upgrade.
+A person carrying the script over, with tests and a check for personal data, closes all four.
 
 ## The planning tools
 

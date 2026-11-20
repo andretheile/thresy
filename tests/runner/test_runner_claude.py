@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
-from thresy.runner import HarnessConfig, Progress, Started
+from thresy.runner import EFFORTS, HarnessConfig, Progress, Started
 from thresy.runner.claude import ClaudeRunner, ClaudeStreamParser
 
 from .runner_testkit import (
@@ -362,3 +363,91 @@ def test_healthcheck_not_logged_in(tmp_path):
 def test_healthcheck_missing_binary(tmp_path):
     health = asyncio.run(ClaudeRunner(HarnessConfig(binary=str(tmp_path / "nope"))).healthcheck())
     assert not health.binary_found and not health.ok
+
+
+# -- reasoning effort -----------------------------------------------------------------
+
+
+def test_command_line_effort(tmp_path):
+    runner = ClaudeRunner()
+    assert runner.capabilities.supports_effort
+    for level in EFFORTS:
+        argv = runner.build_invocation(
+            request(tmp_path, effort=level, session_id=SESSION), "claude", "sonnet"
+        ).argv
+        at = argv.index("--effort")
+        assert argv[at + 1] == level
+        assert argv.index("--resume") < at < argv.index("--permission-mode")
+    assert "--effort" not in runner.build_invocation(request(tmp_path), "claude", "sonnet").argv
+    # A --effort in COACH_CLAUDE_ARGS comes later on the command line, so the operator's wins.
+    pinned = ClaudeRunner(HarnessConfig(extra_args=("--effort", "low")))
+    argv = pinned.build_invocation(request(tmp_path, effort="max"), "claude", None).argv
+    assert argv[argv.index("--effort") : argv.index("--effort") + 2] == ["--effort", "max"]
+    assert argv[-2:] == ["--effort", "low"]
+
+
+_PICKY_CLI = """\
+#!{python}
+# Records every call; with --effort it fails like a CLI that does not know the level.
+import json, sys
+
+with open({log!r}, "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.stdin.read()
+if "--effort" in sys.argv:
+    if {progress_first!r}:
+        block = {{"type": "tool_use", "name": "Bash", "input": {{"command": "coach sql x"}}}}
+        print(json.dumps({{"type": "assistant", "message": {{"content": [block]}}}}))
+    sys.stderr.write({stderr!r})
+    sys.exit(1)
+sys.stdout.write(open({fixture!r}).read())
+"""
+_UNKNOWN_LEVEL = "error: option '--effort <level>' argument 'xhigh' is invalid\n"
+
+
+def picky_claude(
+    directory: Path, *, progress_first: bool = False, stderr: str = _UNKNOWN_LEVEL
+) -> tuple[ClaudeRunner, Path]:
+    directory.mkdir(exist_ok=True)
+    log = directory / "calls.jsonl"
+    cli = directory / "picky-claude"
+    cli.write_text(
+        _PICKY_CLI.format(
+            python=sys.executable,
+            log=str(log),
+            progress_first=progress_first,
+            stderr=stderr,
+            fixture=str(Path(__file__).parent / "fixtures/claude/claude_new_session.jsonl"),
+        )
+    )
+    cli.chmod(0o755)
+    return ClaudeRunner(HarnessConfig(binary=str(cli))), log
+
+
+def calls(log: Path) -> list[list[str]]:
+    return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+def test_a_rejected_effort_is_retried_once_without_it(tmp_path):
+    runner, log = picky_claude(tmp_path / "cli")
+    events, result = run_collect(runner.run(request(tmp_path, effort="xhigh", timeout_s=60)))
+    assert result.ok and result.text == "OK"
+    first, second = calls(log)
+    assert first[first.index("--effort") + 1] == "xhigh" and "--effort" not in second
+    assert sum(isinstance(e, Started) for e in events) == 1
+
+
+def test_no_retry_once_the_run_did_something(tmp_path):
+    runner, log = picky_claude(tmp_path / "cli", progress_first=True)
+    _, result = run_collect(runner.run(request(tmp_path, effort="high", timeout_s=60)))
+    assert not result.ok and result.error_kind == "crash"
+    assert len(calls(log)) == 1
+
+
+def test_no_retry_for_auth_or_without_effort(tmp_path):
+    runner, log = picky_claude(tmp_path / "auth", stderr="Not logged in. Please run /login\n")
+    _, result = run_collect(runner.run(request(tmp_path, effort="high", timeout_s=60)))
+    assert result.error_kind == "auth" and len(calls(log)) == 1
+    plain, plain_log = picky_claude(tmp_path / "plain")
+    _, result = run_collect(plain.run(request(tmp_path, timeout_s=60)))
+    assert result.ok and len(calls(plain_log)) == 1

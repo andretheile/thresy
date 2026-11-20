@@ -16,7 +16,17 @@ from pathlib import Path
 from typing import Any
 
 from .config import RUNNER_NAMES, RunnerConfig
-from .core import Final, Health, Progress, RunEvent, RunRequest, RunResult, Started
+from .core import (
+    EFFORTS,
+    Final,
+    Health,
+    Progress,
+    RunEvent,
+    RunRequest,
+    RunResult,
+    Started,
+    parse_effort,
+)
 from .handle import RunHandle
 from .registry import get_runner
 
@@ -78,7 +88,9 @@ def build_request(
     tier: str,
     timeout: float,
     system_append: str | None,
+    effort: str | None = None,
 ) -> RunRequest:
+    level = parse_effort(effort)  # before reading stdin: a bad level fails at once
     if prompt == "-":
         prompt = sys.stdin.read()
     return RunRequest(
@@ -88,6 +100,7 @@ def build_request(
         model_tier="fast" if tier == "fast" else "smart",
         timeout_s=timeout,
         system_append=system_append,
+        effort=level,
     )
 
 
@@ -145,6 +158,9 @@ def main(argv: list[str] | None = None, environ: Mapping[str, str] | None = None
     run.add_argument("--cwd", required=True, type=Path, help="working directory of the agent")
     run.add_argument("--resume", metavar="SESSION_ID", help="harness session id to resume")
     run.add_argument("--tier", choices=("fast", "smart"), default="smart")
+    run.add_argument(
+        "--effort", choices=EFFORTS, help="reasoning effort (default: the harness's own)"
+    )
     run.add_argument("--timeout", type=float, default=900.0, help="seconds (default 900)")
     run.add_argument("--system-append", help="extra system instructions")
     run.add_argument("--json", action="store_true", help="print one JSON object per event")
@@ -182,6 +198,7 @@ def main(argv: list[str] | None = None, environ: Mapping[str, str] | None = None
             tier=args.tier,
             timeout=args.timeout,
             system_append=args.system_append,
+            effort=args.effort,
         )
         result = asyncio.run(
             run_and_print(args.runner, config, req, as_json=args.json, echo=_print)

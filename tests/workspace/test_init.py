@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from thresy.cli import get_app
-from thresy.workspace import WorkspaceError, import_memory, init_workspace
+from thresy.workspace import WorkspaceError, import_memory, import_scripts, init_workspace
 
 
 def make_template(root: Path) -> Path:
@@ -51,6 +51,7 @@ def test_seeds_an_empty_workspace(tmp_path):
     assert tree(workspace) == tree(template)
     assert sorted(result.added) == sorted(tree(template))
     assert "seeded from the template: 8 file(s)" in result.text()
+    assert (workspace / "scripts").is_dir() and not any((workspace / "scripts").iterdir())
 
 
 def test_out_and_inbox_do_not_make_a_workspace_non_empty(tmp_path):
@@ -114,17 +115,67 @@ def test_second_run_without_changes(tmp_path):
     assert "template files are up to date (4 checked)" in result.text()
 
 
-def test_recreates_missing_out_and_inbox(tmp_path):
+def test_recreates_missing_out_inbox_and_scripts(tmp_path):
     template = make_template(tmp_path)
     workspace = tmp_path / "ws"
     init_workspace(workspace, template)
-    for name in ("out", "inbox"):
+    for name in ("out", "inbox", "scripts"):
         for path in (workspace / name).iterdir():
             path.unlink()
         (workspace / name).rmdir()
     result = init_workspace(workspace, template)
-    assert sorted(result.created_dirs) == ["inbox", "out"]
-    assert (workspace / "out").is_dir() and (workspace / "inbox").is_dir()
+    assert sorted(result.created_dirs) == ["inbox", "out", "scripts"]
+    assert all((workspace / name).is_dir() for name in ("out", "inbox", "scripts"))
+
+
+def test_kept_scripts_are_never_touched(tmp_path):
+    template = make_template(tmp_path)
+    workspace = tmp_path / "ws"
+    init_workspace(workspace, template)
+    kept = {
+        "scripts/climb_history.py": '"""Agent\'s own."""\n',
+        "scripts/_shared.py": "X = 1\n",
+        "scripts/data/notes.txt": "kept\n",
+    }
+    for rel, text in kept.items():
+        (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / rel).write_text(text)
+    # A later template that ships files under scripts/, one with the agent's file name.
+    (template / "scripts").mkdir()
+    (template / "scripts" / "climb_history.py").write_text('"""Template\'s."""\n')
+    (template / "scripts" / "example.py").write_text('"""Example."""\n')
+
+    result = init_workspace(workspace, template)
+    assert not result.seeded
+    assert not any(p.startswith("scripts") for p in result.added + result.updated + result.stale)
+    assert result.not_copied == ["scripts/example.py"]  # reported, never written
+    assert {rel: (workspace / rel).read_text() for rel in kept} == kept
+    assert not (workspace / "scripts" / "example.py").exists()
+
+
+def test_a_workspace_holding_only_kept_scripts_is_not_seeded_over(tmp_path):
+    """A restore that brings scripts/ back before the first start must not count as empty."""
+    template = make_template(tmp_path)
+    (template / "scripts").mkdir()
+    (template / "scripts" / "climb_history.py").write_text('"""Template\'s."""\n')
+    workspace = tmp_path / "ws"
+    (workspace / "scripts").mkdir(parents=True)
+    (workspace / "scripts" / "climb_history.py").write_text('"""Restored."""\n')
+    result = init_workspace(workspace, template)
+    assert not result.seeded
+    assert (workspace / "scripts" / "climb_history.py").read_text() == '"""Restored."""\n'
+    assert (workspace / "AGENTS.md").exists()  # template-owned files still arrive
+
+
+def test_a_link_in_place_of_a_created_directory_is_left_alone(tmp_path):
+    template = make_template(tmp_path)
+    workspace = tmp_path / "ws"
+    init_workspace(workspace, template)
+    (workspace / "scripts").rmdir()
+    (workspace / "scripts").symlink_to(tmp_path / "nowhere")  # dangling
+    result = init_workspace(workspace, template)
+    assert "scripts" not in result.created_dirs
+    assert (workspace / "scripts").is_symlink() and not (tmp_path / "nowhere").exists()
 
 
 def test_a_symlink_in_place_of_a_template_file_is_replaced_not_followed(tmp_path):
@@ -222,6 +273,28 @@ def test_import_memory_refuses_links(tmp_path):
         import_memory(tmp_path, _tar({}, extra=link))
 
 
+def test_import_scripts_restores_kept_scripts(tmp_path):
+    template = make_template(tmp_path)
+    workspace = tmp_path / "ws"
+    init_workspace(workspace, template)
+    (workspace / "scripts" / "old.py").write_text("old\n")
+    written = import_scripts(workspace, _tar({"./climb.py": b"new\n", "_shared.py": b"s\n"}))
+    assert written == ["scripts/climb.py", "scripts/_shared.py"]
+    assert (workspace / "scripts" / "climb.py").read_bytes() == b"new\n"
+    assert (workspace / "scripts" / "old.py").read_text() == "old\n"  # others stay
+    with pytest.raises(WorkspaceError, match=r"unsafe path in the files for scripts/"):
+        import_scripts(workspace, _tar({"../AGENTS.md": b"x"}))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for path in (workspace / "scripts").iterdir():
+        path.unlink()
+    (workspace / "scripts").rmdir()
+    (workspace / "scripts").symlink_to(elsewhere)
+    with pytest.raises(WorkspaceError, match="is a link"):
+        import_scripts(workspace, _tar({"climb.py": b"x"}))
+    assert not any(elsewhere.iterdir())
+
+
 def test_cli_init_and_memory(tmp_path, monkeypatch):
     template = make_template(tmp_path)
     workspace = tmp_path / "ws"
@@ -243,6 +316,22 @@ def test_cli_init_and_memory(tmp_path, monkeypatch):
     data = json.loads(second.output)
     assert data["seeded"] is False and data["memory_imported"] == ["memory/profile.md"]
     assert (workspace / "memory" / "profile.md").read_text() == "from stdin\n"
+    restored = tmp_path / "restored-scripts"
+    restored.mkdir()
+    (restored / "climb.py").write_text('"""Q?"""\n')
+    third = runner.invoke(
+        get_app(),
+        ["workspace", "init", "--scripts-from", str(restored), "--memory-from", "-"],
+        input=_tar({"goals.md": b"g\n"}).getvalue(),
+    )
+    assert third.exit_code == 0, third.output
+    assert (
+        "script   scripts/climb.py" in third.output and "memory   memory/goals.md" in third.output
+    )
+    both = runner.invoke(
+        get_app(), ["workspace", "init", "--scripts-from", "-", "--memory-from", "-"]
+    )
+    assert both.exit_code == 1 and "only one of" in both.output
     bad = runner.invoke(get_app(), ["workspace", "init", "--template", str(tmp_path / "none")])
     assert bad.exit_code == 1 and "no workspace template" in bad.output
     get_settings.cache_clear()

@@ -9,12 +9,14 @@ import typer
 
 from thresy.cli import JsonOption, emit, fail
 
-app = typer.Typer(help="Backups of the database, FIT files and memory files.", no_args_is_help=True)
+app = typer.Typer(
+    help="Backups of the database, FIT files, memory files and kept scripts.", no_args_is_help=True
+)
 
 
 @app.callback()
 def _group() -> None:
-    """Backups of the database, FIT files and memory files (docs/backup.md)."""
+    """Backups of the database, FIT files, memory files and kept scripts (docs/backup.md)."""
 
 
 def _config(*, need_target: bool, client: Any = None):
@@ -67,7 +69,8 @@ def run(
     ] = False,
     json_out: JsonOption = False,
 ) -> None:
-    """Back up now: database dump, memory files and new FIT files to COACH_BACKUP_URL."""
+    """Back up now: database dump, memory files, kept scripts and new FIT files to
+    COACH_BACKUP_URL."""
     from .core import run_backup
 
     try:
@@ -154,10 +157,15 @@ def _status_text(data: dict[str, Any]) -> str:
     lines = [f"target: {target}{' (encrypted with age)' if data.get('encrypted') else ''}"]
     if data.get("last_success_at"):
         result = data.get("last_result") or {}
+        workspace = ""
+        if "memory_files" in result:  # older records lack the counts
+            workspace = f"{result['memory_files']} memory files, "
+        if "scripts_files" in result:
+            workspace += f"{result['scripts_files']} kept scripts, "
         lines.append(
             f"last success: {data['last_success_at']} (run {data.get('last_run_id')}, "
             f"{result.get('objects', '?')} objects, {int(result.get('bytes') or 0) / 1e6:.1f} MB, "
-            f"{result.get('fit_uploaded', 0)} new FIT files)"
+            f"{workspace}{result.get('fit_uploaded', 0)} new FIT files)"
         )
     else:
         lines.append("last success: never")

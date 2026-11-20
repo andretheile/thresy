@@ -380,6 +380,7 @@ def test_run_timeout_from_settings(make_harness) -> None:
             await h.settle()
             assert h.runner.requests[0].timeout_s == 42
             assert h.runner.requests[0].model_tier == "smart"
+            assert h.runner.requests[0].effort is None  # unset: the harness's default
 
     asyncio.run(scenario())
 

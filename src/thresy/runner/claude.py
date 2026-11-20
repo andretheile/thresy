@@ -3,7 +3,7 @@
 Command line (prompt on stdin, working directory = RunRequest.cwd):
 
     claude -p --output-format stream-json --verbose
-           [--model <model>] [--resume <session_id>]
+           [--model <model>] [--resume <session_id>] [--effort <level>]
            [--append-system-prompt-file <private temporary file>]
            --permission-mode bypassPermissions --permission-prompts none
            [extra args]
@@ -15,6 +15,11 @@ is how this deployment reaches the model through a subscription.
 
 Auto memory is off on every run (CLAUDE_CODE_DISABLE_AUTO_MEMORY=1): the
 coach's memory is the workspace's memory/ files, which every harness sees.
+
+RunRequest.effort goes to --effort, which Claude Code documents as the level for
+this session, not saved; a level the model lacks runs at the highest one it has
+below it. CLAUDE_CODE_EFFORT_LEVEL (COACH_CLAUDE_ENV, the agent's credential file)
+outranks the flag by the CLI's own precedence, so it stays an operator override.
 """
 
 from __future__ import annotations
@@ -233,7 +238,10 @@ class ClaudeStreamParser(StreamParser):
 class ClaudeRunner(CliRunner):
     name = "claude"
     capabilities = RunnerCapabilities(
-        supports_resume=True, supports_streaming=True, supports_system_append=True
+        supports_resume=True,
+        supports_streaming=True,
+        supports_system_append=True,
+        supports_effort=True,
     )
     default_binaries = ("claude",)
     default_models: ClassVar[Mapping[str, str | None]] = MappingProxyType(
@@ -282,6 +290,8 @@ class ClaudeRunner(CliRunner):
             argv += ["--model", model]
         if req.session_id:
             argv += ["--resume", req.session_id]
+        if req.effort:
+            argv += ["--effort", req.effort]
         temp_dirs: tuple = ()
         if req.system_append:
             directory, path = private_file(
