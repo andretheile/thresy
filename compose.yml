@@ -156,6 +156,8 @@ services:
       COACH_HOME_LOCATION:
       COACH_RUNNER: ${COACH_RUNNER:-claude}
       COACH_AGENT_USER: ${COACH_AGENT_USER-agent}
+      # Fixed here so that nothing else (a .env file) can point it somewhere else.
+      COACH_AGENT_USER_HELPER: /usr/local/libexec/thresy/run-as-agent
       COACH_TELEGRAM_TOKEN:
       COACH_TELEGRAM_CHAT_IDS:
       # The model credential belongs in the agent's credential file (docs/deploy.md). Setting

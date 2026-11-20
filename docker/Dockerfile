@@ -105,5 +105,7 @@ RUN for user in coach agent; do \
     done
 
 USER coach
-WORKDIR /workspace
+# Not /workspace: `coach` reads a .env file from its working directory, and the agent can write
+# the workspace. /app belongs to root.
+WORKDIR /app
 CMD ["coach", "--help"]

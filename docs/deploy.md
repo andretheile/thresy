@@ -284,7 +284,7 @@ each: it runs as `agent`, with `no_new_privs`; it cannot read the environment of
 PID 1 or any other process of another user, cannot signal the bridge, cannot read a private file
 of the bridge, cannot run the helper; its environment is the runner's allow-list plus the
 credential file's variables and holds no value of the bridge's other variables; it can write only
-to the workspace, its home and `/tmp`; the workspace exchange works both ways; and the bridge
+to the workspace, its home and `/tmp` (not to the directory `coach` reads a `.env` file from); the workspace exchange works both ways; and the bridge
 stops its whole process group, including processes that ignore SIGINT and SIGTERM. Any `FAIL`
 means the agent is not isolated: see Troubleshooting.
 
@@ -335,6 +335,7 @@ Look first at `docker compose ps -a` and `docker compose logs --tail 100 <servic
 | `run-as-agent: not permitted for user id 0` | A command was run as root (`exec -u root`); run it as the default user. |
 | `--isolation`: FAIL "runs as another user ... COACH_AGENT_USER is not set" | `COACH_AGENT_USER` is set to an empty value in `.env`; remove that line. |
 | `--isolation`: FAIL "workspace exchange ... missing" | Run `docker compose run --rm --no-deps bridge coach workspace init`. |
+| `--isolation`: FAIL "writes the service's working directory" | `coach` was run from a directory the agent can write (`-w /workspace`, or an image with another `WORKDIR`); a `.env` file there would configure the bridge. Run `coach` from the default `/app`. |
 | `--isolation`: FAIL "stops ...: only zombie processes are left" | The container runs without an init process; keep `init: true`. |
 | `--isolation`: WARN "model credential in the bridge's environment" | Move the token from `.env` into the agent's credential file (step 9) and `docker compose up -d bridge`. |
 | `coach runner check`: "not logged in" | The credential file is missing or wrong: step 9. |

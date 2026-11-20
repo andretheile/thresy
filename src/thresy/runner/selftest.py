@@ -9,7 +9,8 @@ directory) and reports what the probe could and could not do:
   through ``/proc``, signal the bridge, read a private file of the bridge, or run the
   user-switch helper itself;
 * whether its environment is exactly the allow-list and carries no secret of the bridge;
-* where outside the workspace it can write;
+* where outside the workspace it can write, in particular whether it can write the working
+  directory of ``coach`` (which reads a ``.env`` file from there);
 * whether the workspace exchange works (the agent reads ``inbox/``, the bridge reads ``out/``);
 * whether the bridge can stop the agent's whole process group, once for processes that exit on
   SIGINT and once for processes that ignore SIGINT and SIGTERM.
@@ -400,13 +401,14 @@ async def run_self_test(
         # Without a switch the agent is this user: its home is the bridge's home.
         must_not = [p for p in must_not if p != str(bridge_home)]
     info_write = [tempfile.gettempdir()]
+    service_cwd = str(Path.cwd())
     args = {
         "parent_pid": os.getpid(),
         "min_len": MIN_SECRET_LEN,
         "private_file": private_name,
         "private_token": private_token,
         "helper": switch.helper if switch else "",
-        "write_paths": list(dict.fromkeys(must_write + must_not + info_write)),
+        "write_paths": list(dict.fromkeys([*must_write, *must_not, *info_write, service_cwd])),
         "inbox_file": str(inbox_file) if inbox_file else None,
         "out_file": str(out_file) if out_file else None,
         "exchange_token": exchange_token,
@@ -431,6 +433,7 @@ async def run_self_test(
 
     try:
         _judge(report, probe, switch, expected, env_cfg, args, must_write, must_not, info_write)
+        _judge_cwd(report, probe, service_cwd)
         _judge_exchange(report, probe, inbox_file, out_file, exchange_token, workspace)
         _judge_credentials(report, probe, switch)
     finally:
@@ -627,6 +630,23 @@ def _judge(
         report.add(
             "WARN", "umask", f"{probe['umask']:03o}, expected {switch.umask:03o} for the agent"
         )
+
+
+def _judge_cwd(report: IsolationReport, probe: dict[str, Any], cwd: str) -> None:
+    """The bridge and `coach` read a .env file from their working directory, so the agent
+    must not be able to write there (the image runs everything from /app)."""
+    outcome = probe["writes"].get(cwd)
+    name = "writes the service's working directory"
+    if outcome == "writable":
+        report.add(
+            "FAIL",
+            name,
+            f"yes: {cwd} is writable for the agent, and `coach` reads a .env file from its "
+            "working directory, so the agent could configure the bridge; run the services from "
+            "a directory the agent cannot write (the image uses /app)",
+        )
+    else:
+        report.add("PASS", name, f"no: {cwd} ({outcome}), where `coach` looks for a .env file")
 
 
 def _judge_exchange(
