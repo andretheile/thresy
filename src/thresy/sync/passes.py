@@ -44,6 +44,7 @@ from thresy.garmin.errors import (
     GarminNotFound,
     GarminRateLimited,
 )
+from thresy.logs import redact
 from thresy.store import Conn
 from thresy.sync import state
 from thresy.sync.config import SyncConfig
@@ -486,6 +487,7 @@ class ClientSource(Protocol):
 def _failed(
     conn: Conn, config: SyncConfig, now: datetime, kind: str, error: str, raise_events: bool
 ) -> SyncOutcome:
+    error = redact(error)  # stored, raised as an event and shown to the athlete
     failures = state.record_failure(conn, now, kind, error)
     if raise_events and kind != "auth" and failures >= config.fail_event_after:
         state.insert_sync_failed(conn, now, error)

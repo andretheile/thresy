@@ -25,14 +25,14 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
-import logging
-import sys
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+
+from thresy import logs
 
 # package -> mount name under `coach` (None = merge into the top level)
 PLUGINS: dict[str, str | None] = {
@@ -77,7 +77,11 @@ def emit(data: Any, *, as_json: bool, text: str | None = None) -> None:
 
 
 def fail(message: str, *, as_json: bool = False, code: int = 1) -> typer.Exit:
-    """Print an error (to stderr, or as ``{"error": ...}`` JSON on stdout) and return an Exit."""
+    """Print an error (to stderr, or as ``{"error": ...}`` JSON on stdout) and return an Exit.
+
+    The message is redacted (:func:`thresy.logs.redact`): it often quotes an exception, and a
+    connection error can quote a database URL with its password."""
+    message = logs.redact(message)
     if as_json:
         typer.echo(to_json({"error": message}))
     else:
@@ -100,11 +104,9 @@ app.add_typer(db_app, name="db")
 def _root(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Log more.")] = False,
 ) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
+    # Every command and service logs through this: request logging of HTTP clients off,
+    # secrets redacted from every record and uncaught traceback (thresy.logs).
+    logs.configure(verbose=verbose)
 
 
 @db_app.command("migrate")

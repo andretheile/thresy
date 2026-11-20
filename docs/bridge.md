@@ -304,6 +304,16 @@ belongs to `coach weather`, `thresy.tools.weather.WeatherSettings`). The bridge'
 The bridge uses long polling (`getUpdates`), so no port is opened and no webhook may be set
 for the bot.
 
+### The token and the log
+
+The token is part of every Bot API URL (`https://api.telegram.org/bot<token>/<method>`), and
+the HTTP client logs every request URL at INFO. The bridge's log never shows it: request logging
+of the HTTP clients is off, the transport registers the token with the log redaction when it
+is created, and every log line, traceback and stored delivery error is redacted (docs/deploy.md,
+"Logs and secrets", also for upgrading from a version that leaked it).
+`tests/transport/test_telegram_http.py` runs the transport's real HTTP stack against a fake Bot
+API server on 127.0.0.1 and checks that the token appears nowhere in the process's output.
+
 ### Formatting
 
 The agent writes Markdown. Telegram's Markdown and HTML parse modes reject a whole message for

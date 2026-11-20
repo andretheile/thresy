@@ -316,6 +316,24 @@ To upgrade only the agent CLI, change `AGENT_CLI_VERSION` in `.env`, then
 `docker compose build bridge && docker compose up -d`. The `migrate`, `sync` and `backup`
 services use the same image and are recreated as well.
 
+**Upgrading from a version that wrote the Telegram bot token into the bridge's log.** Earlier
+versions logged one line per Telegram API call, with the request URL and so the bot token in
+it (`INFO httpx: HTTP Request: POST https://api.telegram.org/bot<token>/getUpdates ...`). A
+container's log lives as long as the container, so after the upgrade make sure the bridge
+container is a new one, which discards the old log with all its rotated files:
+
+```sh
+docker compose up -d --force-recreate bridge
+docker compose logs --no-log-prefix bridge | grep -c 'api.telegram.org/bot'    # 0
+```
+
+Then consider issuing a new token, since everyone who could run `docker logs` on the host could
+read the old one: in Telegram, BotFather, `/mybots`, the bot, "API Token", "Revoke current
+token"; put the new token into `COACH_TELEGRAM_TOKEN` in `.env` and
+`docker compose up -d bridge`. Copies of the log made elsewhere (a log collector, a saved
+`docker logs` output) have to be deleted separately. What the logs keep out now, and how: step
+18.
+
 ## 16. Restoring
 
 docs/backup.md, "Restoring after a loss", restores the database, the FIT files and the memory
@@ -348,3 +366,36 @@ Look first at `docker compose ps -a` and `docker compose logs --tail 100 <servic
 | "The backup failed" in the chat | `docker compose exec backup coach backup status` shows the error. `pg_dump for PostgreSQL 16 is needed`: keep `PG_MAJOR` in `compose.yml` equal to the `db` image. `may not create the scratch database`: `ALTER ROLE coach_app CREATEDB` (docs/backup.md). `403 ... objectCreator`: the service account's role on the bucket. `cannot use the service-account key ... Permission denied`: the key file must be readable by uid 10001. |
 | Times in messages are off by hours | `COACH_TZ` is not the athlete's time zone. |
 | Disk filling up | `docker system df`; the `db-data` volume, old images (`docker image prune`), and the build cache (`docker builder prune`). Logs are capped at 30 MB per container. |
+
+## 18. Logs and secrets
+
+Every service logs to its container's output (`docker compose logs <service>`, capped at 30 MB
+per container), at INFO; one-off commands take `-v` for DEBUG. Anyone who can run
+`docker logs` on the host can read these logs, so they must not contain a secret: not the
+Telegram bot token, the database passwords, the Garmin password, Garmin's session tokens and
+login tickets, or the model credential. How (`src/thresy/logs.py`):
+
+- **No request logging.** The HTTP client libraries log request URLs, and python-telegram-bot
+  puts the bot token into every URL. Their loggers are held at a fixed level, also with `-v`:
+  `httpx`, `httpcore` and `urllib3` at WARNING, python-telegram-bot's `telegram.Bot` and
+  `telegram.ext.ExtBot` at INFO.
+- **Redaction of every log line.** A filter on the log handler replaces secrets in each
+  message, traceback and stack with `<redacted>` before it is written: the values of variables
+  named `*_TOKEN`, `*_PASSWORD`, `*_SECRET`, `*_API_KEY` (from the environment and `.env`), the
+  passwords in the database URLs, the Telegram token and a Garmin password typed into
+  `coach sync login`; and anything shaped like a Telegram bot token, `user:password@` in a URL,
+  a `ticket=` or `token=` query value, a bearer token, a JWT, an `sk-...` API key or a
+  `password=` assignment. Uncaught errors (the traceback Docker shows when a service crashes)
+  and loggers that do not pass their records on (logging's last-resort handler) go through the
+  same filter.
+- **Error texts that leave the process** are redacted the same way: errors of `coach` commands,
+  sync and backup failures (stored in the database and reported in the chat), and Telegram
+  delivery errors (stored in `outbox.error`).
+
+A value shorter than 6 characters is not replaced on its own (the shapes above still are), and a
+database password equal to its user name (as in the development set-up) is not treated as one.
+To check the bridge's log for the token without putting it on a command line:
+
+```sh
+docker compose logs bridge | grep -cF -f <(sed -n 's/^COACH_TELEGRAM_TOKEN=//p' .env)   # 0
+```
