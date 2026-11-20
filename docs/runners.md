@@ -86,6 +86,8 @@ Recommended bridge policy for resumed sessions: if a run with `session_id` fails
 | `COACH_<NAME>_ENV` | Extra environment for the CLI, shell-quoted `KEY=VALUE` pairs |
 | `COACH_<NAME>_PASS_ENV` | Parent variables the CLI may inherit beyond the allow-list: names, or prefixes ending in `*`, separated by spaces or commas (e.g. `AWS_REGION GOOGLE_*`) |
 | `COACH_<NAME>_EXIT_WAIT_S` | Seconds the CLI gets to exit after its final result before it is stopped (default `10`) |
+| `COACH_AGENT_USER` | Start every CLI process as this Unix user, for all harnesses (unset or empty: off). See [The agent's own Unix user](#the-agents-own-unix-user) |
+| `COACH_AGENT_USER_HELPER` | The setuid helper that switches users (default `/usr/local/libexec/thresy/run-as-agent`) |
 
 Defaults:
 
@@ -111,6 +113,8 @@ The agent has a shell and reads the web, so the CLI does **not** inherit the ser
 2. The adapter's fixed additions (Claude: `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`).
 3. `COACH_<NAME>_ENV`.
 4. `RunRequest.env`: this is how the bridge hands the agent its own settings, such as `COACH_DATABASE_URL` set to the `coach_agent` URL.
+
+With `COACH_AGENT_USER` set, `HOME`, `USER` and `LOGNAME` describe the agent user instead, the variables of the agent's credential file are added, and the C library removes `TMPDIR` (see below).
 
 The healthcheck uses the same environment. Bedrock, Vertex or Foundry credentials (`AWS_*`, `GOOGLE_*`) do not pass by default; list them in `COACH_CLAUDE_PASS_ENV` if you use them. When you run `coach runner run` from inside another Claude Code session, that session's `CLAUDE_*` variables pass through as well; use a clean shell for manual tests.
 
@@ -153,7 +157,7 @@ What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). 
 ### Authentication on a server
 
 1. On a machine with a browser, run `claude setup-token` (needs a Pro, Max, Ultra, Team or Enterprise subscription). It prints a one-year OAuth token.
-2. Give the bridge service `CLAUDE_CODE_OAUTH_TOKEN=<token>` (a secret in the Compose file, never in git). It passes the allow-list because it starts with `CLAUDE_`.
+2. With the agent user (the Compose default), write `CLAUDE_CODE_OAUTH_TOKEN=<token>` into the agent's credential file (see [The agent's own Unix user](#the-agents-own-unix-user) and docs/deploy.md); the bridge then never holds it. Without it, give the bridge service `CLAUDE_CODE_OAUTH_TOKEN=<token>` (a secret in `.env`, never in git); it passes the allow-list because it starts with `CLAUDE_`.
 3. Make sure neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN` is set: both take precedence over the OAuth token, and usage would be billed to the API key. The healthcheck warns if `ANTHROPIC_API_KEY` is set.
 4. Check with `coach runner check` (or `python -m thresy.runner check`). It runs `claude auth status --json`, which spends no model usage. With a token it reports `oauth_token`; whether the token is still valid only shows on the first model request (an invalid token fails within seconds with `error_kind="auth"`).
 
@@ -164,6 +168,7 @@ What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). 
 ### Other things to know
 
 - `bypassPermissions` refuses to start as root (outside a recognised sandbox), so run the container as a non-root user.
+- With the agent user (above), Claude Code keeps its state (`~/.claude.json`, `~/.claude/`, session transcripts) in the agent's home, the `agent-home` volume. Settings and hooks there are the agent's own; a manipulated agent can change them and so influence its later runs.
 - The working directory's `CLAUDE.md`, `.claude/settings.json` hooks and `.mcp.json` servers load in `-p` mode without a trust prompt. The coach workspace is ours, so that is intended.
 - **System prompt on resume:** Claude Code records the system prompt (including the appended file) at a session's first request and reuses it on every resume until the conversation is compacted. A changed `system_append` only takes effect in a new session. Put per-run context into the prompt, not into `system_append`, or add `--system-prompt-snapshot off` to `COACH_CLAUDE_ARGS` (at the price of prompt-cache reuse).
 - After the final result, `claude -p` can stay alive waiting for background work (background shell commands, sub-agents; by its docs up to 10 minutes) and may even start another turn with its result. The runner returns the first result after `exit_wait_s` and stops that background work.
@@ -211,6 +216,48 @@ agent -p --output-format stream-json --workspace <cwd>
 - No usage or cost is reported.
 - Authentication: `agent login` (set `NO_OPEN_BROWSER=1` on a server) or `CURSOR_API_KEY`. The healthcheck runs `agent status --format json`; its JSON shape is undocumented, so the result may be "auth unknown".
 
+## The agent's own Unix user
+
+An allow-listed environment keeps secrets out of the agent's *own* environment, but on Linux a process can read the environment of every other process of the same user (`/proc/<pid>/environ`), signal it and read its files. The bridge's environment holds the Telegram token and the read/write database URL, so in the container the agent runs as a second user. This is a setting of the shared subprocess layer, off by default (local development needs no second user):
+
+```
+COACH_AGENT_USER=agent                                         # on in compose.yml
+COACH_AGENT_USER_HELPER=/usr/local/libexec/thresy/run-as-agent # the default
+```
+
+With it, every CLI process the runner starts (runs and health checks) goes through a small setuid helper, [`docker/run-as-agent.c`](../docker/run-as-agent.c):
+
+```
+run-as-agent -- /usr/bin/claude -p --output-format stream-json ...   # the run
+run-as-agent --signal 2 <pgid>                                        # stopping it
+```
+
+The helper is owned by root, group `coach`, mode 4750, so only the bridge's user can run it, and it also refuses every caller whose real user id is not the bridge's. It switches for good to the agent user (supplementary groups, real, effective and saved ids; it checks that root cannot be regained), sets `no_new_privs` so neither the CLI nor anything it starts can gain privileges again (setuid programs such as `su` lose their effect), and then either executes the CLI or, with `--signal`, sends a signal to a process group. As the agent user, `kill(-pgid)` reaches only the agent's own processes; process groups 0 and 1 are refused. The user and group ids and the credential file's path are compiled in (`docker/build-run-as-agent.sh`, the same values as `docker/setup-users.sh`).
+
+What changes for the runner:
+
+| | Without `COACH_AGENT_USER` | With it |
+|---|---|---|
+| Command line | the CLI | `[helper, "--", *cli]`; the environment travels through `execve`, never through arguments |
+| `HOME`, `USER`, `LOGNAME` | the service's | the agent user's (password database) |
+| Model credential | from the allow-listed environment | also from the agent's credential file `<agent home>/.thresy/credentials.env` (below) |
+| `TMPDIR`, `LD_*` and similar | passed if allow-listed | removed by the C library because the helper is setuid (glibc's secure mode) |
+| umask | inherited | `007`: files in the shared workspace stay readable and writable for the group, private otherwise |
+| Stopping the group | `killpg` | `run-as-agent --signal`, because the service's user may not signal another user's processes. Whether the group still exists is checked with `killpg(pgid, 0)` (`EPERM` means it exists) |
+| `--append-system-prompt-file` | mode 0600 in a 0700 directory | mode 0640 in a 0750 directory, group = the agent's group |
+
+Neither the stop sequence nor its timing changes: SIGINT, SIGTERM, SIGKILL with the same grace periods. If the helper cannot deliver a signal, the next one is tried anyway and the failure is logged.
+
+**The agent's credential file.** `<agent home>/.thresy/credentials.env` (`/home/agent/.thresy/credentials.env` in the image) holds `NAME=value` lines (`#` comments, an optional `export `, one pair of quotes around a value). The helper reads it as the agent user, after the switch, and adds the variables to the CLI's environment (overriding variables of the same name). The bridge's user cannot read it (the agent's home is mode 0700), so the model credential (`CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `CURSOR_API_KEY`) does not have to be in the bridge's environment at all. Values are never printed. docs/deploy.md shows how to write it.
+
+**Files and groups.** The image has user `coach` (10001) and user `agent` (10002, group `agent` 10002); `coach` is also a member of group `agent`, never the other way round. The workspace (`/workspace`) belongs to `agent:agent` with mode 2770 (setgid, so everything created inside keeps the group), and `coach workspace init` creates directories 2770 and files 0660 there. So the bridge writes `inbox/` and reads `out/`, the agent reads `inbox/` and writes `out/`, and both can edit what the other created. The agent's home (`/home/agent`) is 0700; the bridge's home (`/home/coach`) is 0700; `/data` (read-only in the bridge) and `/app` are not writable for the agent.
+
+**Checking it.** `coach runner check --isolation` (or `python -m thresy.runner check --isolation`) starts a probe the way an agent run is started and prints one line per check: another user, `no_new_privs`, no access to the environment of the bridge, PID 1 or any other user's process, no signal to the bridge, no private file of the bridge, the helper not executable for the agent, the environment exactly the allow-list, no value of a non-allow-listed bridge variable in the agent's environment, no writes outside the workspace except its home and `/tmp`, the workspace exchange in both directions, and the bridge stopping the agent's process group (once with processes that exit on SIGINT, once with processes that ignore SIGINT and SIGTERM). It ends with `RESULT: PASS` or `RESULT: FAIL`, exits 0 or 1, and prints JSON with `--json`. Run it in the bridge container: `docker compose exec bridge coach runner check --isolation`.
+
+**Tested** on Linux in a test image built from the runtime stage's base image with the same users, helper and container settings as the bridge (`init`, all capabilities dropped except `SETUID` and `SETGID`): `sh docker/isolation-test.sh` builds it, runs `tests/runner/test_runner_process.py`, `tests/runner/test_isolation.py` and `tests/runner/test_isolation_linux.py` (real process groups across the two users: timeout, SIGKILL escalation, cancellation, consumer cancellation, leftovers after exit, a lingering CLI, the credential file, the shared workspace) and the self-test, and removes the image. Elsewhere `test_isolation.py` covers the runner's side with a stand-in helper.
+
+**Limits.** The agent still has everything an agent run needs: its database roles (`coach_agent`, `coach_ro`), its model credential, the workspace, its home, `/tmp` and the network. Processes it moves out of its process group (`setsid`) are not stopped with the group; they run as the agent user, without access to the bridge, until the container stops. It shares the bridge container's memory and process limits, so a runaway agent can make the bridge run out of memory.
+
 ## Process handling
 
 - Each CLI runs in its own session and process group (`start_new_session=True`). stdout is read in chunks and split into lines (lines over 16 MiB are dropped and counted); stderr is drained concurrently into a 16 KiB tail, so a chatty child never blocks.
@@ -221,6 +268,7 @@ agent -p --output-format stream-json --workspace <cwd>
 
 ```
 coach runner check [--runner NAME | --all] [--json]
+coach runner check --isolation [--json]                                     # see above
 coach runner run --cwd DIR [--runner NAME] [--resume ID] [--tier fast|smart]
                  [--timeout S] [--system-append TEXT] [--json] PROMPT     # "-" reads stdin
 ```

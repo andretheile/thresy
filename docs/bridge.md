@@ -168,8 +168,9 @@ debrief are due at the same time they become one run and one message
 
 ### Notifications
 
-`garmin_auth_required` and `sync_failed` become plain messages without an agent run, at most
-one per kind per `COACH_BRIDGE_NOTIFY_INTERVAL_H` (12 h, kept in `sync_state` keys
+`garmin_auth_required`, `sync_failed` and `backup_failed` (from the backup service, docs/backup.md;
+the message names the last successful backup) become plain messages without an agent run, at
+most one per kind per `COACH_BRIDGE_NOTIFY_INTERVAL_H` (12 h, kept in `sync_state` keys
 `bridge:notified:<kind>`). A sync failure is not reported within that interval after a Garmin
 login notice (the login is the cause). The sync raises `sync_failed` only after several failed
 passes in a row, so `COACH_BRIDGE_SYNC_FAILED_THRESHOLD` defaults to 1; the notice names the
@@ -333,9 +334,12 @@ No real Telegram bot and no real agent CLI were available while this was built.
   `NO_REPLY` and `coach send` is untested.
 - **Process behaviour:** SIGTERM handling of `coach bridge run` inside the container and the
   timing against Docker's stop timeout were not exercised end to end.
-- **Security, by analysis:** the agent runs as the same Unix user as the bridge. On Linux a
-  process can read `/proc/<pid>/environ` of other processes of its own user, including the
-  bridge and the container's init, whose environment holds the Telegram token, the read/write
-  database URL and the model credential. The environment allow-list keeps these out of the
-  agent's own environment, but it is not a boundary against a determined agent. Running the
-  agent CLI under a separate user (or in a separate container) would close this.
+- **Security:** in the container the agent runs as its own Unix user (`COACH_AGENT_USER`,
+  docs/runners.md "The agent's own Unix user"), so it cannot read the bridge's or PID 1's
+  environment through `/proc`; `coach runner check --isolation` checks this on the server.
+  Without that setting (local development) the agent runs as the bridge's user and the
+  environment allow-list is not a boundary against a determined agent. One gap remains in the
+  outbox: a file under `out/` is checked (resolved, regular, inside `out/`) before delivery and
+  read again by path when it is sent, so an agent that swaps it for a symlink in between could
+  make the bridge send a file the bridge can read; opening it once with `O_NOFOLLOW`, checking
+  the open file and sending that would close it.
