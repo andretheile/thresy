@@ -220,11 +220,11 @@ What the four real runs showed (Claude Code 2.1.327, `haiku`, empty directory). 
 
 ### Credential expiry
 
-The result message of `claude -p` (stream-json and json) can carry `credential_expires_at`, an ISO 8601 instant such as `2026-12-03T20:14:46.229Z` (Claude Code 2.1.318 and later). Claude Code's own documentation pages do not describe it; the Agent SDK's type definition does (`@anthropic-ai/claude-agent-sdk`, `sdk.d.ts`, `SDKResultMessage`, checked in version 0.3.329):
+The result message of `claude -p` (stream-json and json) can carry `credential_expires_at`, an ISO 8601 instant such as `2026-12-03T20:14:46.229Z`. The Claude Code 2.1.318 release notes introduced it: "Added the date a stored claude.ai sign-in ends to `claude auth status` (`loginExpiresAt`) and to `claude -p` JSON results (`credential_expires_at`)". Older versions never report it. Claude Code's documentation pages do not describe it; the Agent SDK's type definition does (`@anthropic-ai/claude-agent-sdk`, `sdk.d.ts`, `SDKResultMessage`, checked in version 0.3.329):
 
 > When the claude.ai credential this process's requests send ends for good, as an ISO 8601 instant, read as the result is written. For a stored claude.ai login it is the end of the login's refresh chain as stored at sign-in, which renewing the access token does not move. That date is the server's when it sent one and otherwise a 30-day estimate, and the real end can be up to 3 days earlier. The server is not asked, so a login revoked early still shows its date, and a date in the past means the login has probably ended, not that it has. Absent when no date is known, for every other credential (an API key, a token from the environment, another provider), on results this process did not number, and from older producers.
 
-So, by login kind (the `claude auth status` column is from a published third-party test of 2.1.318, not from Anthropic's documentation):
+So, by login kind (what `claude auth status` shows for a token or an API key is from a published third-party test of 2.1.318, not from Anthropic):
 
 | Login | `credential_expires_at` | `claude auth status --json` |
 |---|---|---|
