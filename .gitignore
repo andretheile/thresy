@@ -29,3 +29,6 @@ plots/
 out/
 *.log
 .DS_Store
+
+# Keys and credentials for the server (docs/backup.md, docs/deploy.md)
+secrets/
