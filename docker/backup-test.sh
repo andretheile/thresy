@@ -34,10 +34,14 @@ docker run --rm -v "$PWD:/src:ro" "$NETWORK" \
     pip install -q --root-user-action=ignore --disable-pip-version-check \
       "psycopg[binary,pool]==3.3.9" "pydantic-settings==2.16.3" "typer==0.29.2" \
       "python-dotenv==1.2.4" "google-cloud-storage==3.17.1" "pytest==9.2.0"
-    mkdir /work && cp -r /src/src /src/tests /src/migrations /src/pyproject.toml /work/
+    mkdir /work
+    cp -r /src/src /src/tests /src/migrations /src/workspace /src/pyproject.toml /work/
+    # Not as root, like the backup service (uid coach): root reads files a test made unreadable.
+    useradd --create-home tester && chown -R tester /work
     cd /work
     status=0
-    PYTHONPATH=src python -m pytest -q -p no:cacheprovider -rs tests/backup tests/test_store.py \
+    runuser -u tester -- env COACH_TEST_ADMIN_URL="$COACH_TEST_ADMIN_URL" PYTHONPATH=src \
+      python -m pytest -q -p no:cacheprovider -rs tests/backup tests/test_store.py \
       > /tmp/pytest.log 2>&1 || status=$?
     cat /tmp/pytest.log
     [ "$status" -eq 0 ] || exit "$status"
