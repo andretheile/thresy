@@ -228,7 +228,8 @@ def init_workspace(workspace: Path, template: Path | None = None) -> InitResult:
         data = source.read_bytes()
         if target.is_file() and not target.is_symlink():
             try:
-                if target.read_bytes() == data:
+                # Size first: the agent owns the workspace and could leave a huge file here.
+                if target.stat().st_size == len(data) and target.read_bytes() == data:
                     result.unchanged.append(str(rel))
                     continue
             except PermissionError:
