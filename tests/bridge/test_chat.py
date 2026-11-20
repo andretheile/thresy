@@ -300,6 +300,18 @@ def test_agent_environment_is_exactly_what_it_needs(make_harness) -> None:
     asyncio.run(scenario())
 
 
+def test_agent_gets_the_home_location_from_the_bridge(make_harness) -> None:
+    async def scenario() -> None:
+        bridge = {"home_location": " Springfield, Illinois "}
+        async with make_harness(FakeRunner(reply="ok"), bridge=bridge) as h:
+            await h.say("weather?")
+            await h.settle()
+            env = dict(h.runner.requests[0].env)
+            assert env["COACH_HOME_LOCATION"] == "Springfield, Illinois"
+
+    asyncio.run(scenario())
+
+
 def test_choice_answer_comes_back_as_a_message_once(make_harness) -> None:
     async def scenario() -> None:
         async with make_harness(answering()) as h:

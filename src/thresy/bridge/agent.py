@@ -163,6 +163,8 @@ class AgentService:
         }
         if s.database_url_ro:
             env["COACH_DATABASE_URL_RO"] = s.database_url_ro
+        if self.bs.home_location and self.bs.home_location.strip():
+            env["COACH_HOME_LOCATION"] = self.bs.home_location.strip()
         return env
 
     # -- sessions --------------------------------------------------------------------------------

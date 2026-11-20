@@ -153,7 +153,7 @@ services:
       COACH_TZ: ${COACH_TZ:-UTC}
       COACH_LANGUAGE: ${COACH_LANGUAGE:-en}
       COACH_NAME: ${COACH_NAME:-Thresy}
-      COACH_HOME_LOCATION:
+      COACH_HOME_LOCATION: # handed to the agent by the bridge (for `coach weather`)
       COACH_RUNNER: ${COACH_RUNNER:-claude}
       COACH_AGENT_USER: ${COACH_AGENT_USER-agent}
       # Fixed here so that nothing else (a .env file) can point it somewhere else.
@@ -166,11 +166,10 @@ services:
       CODEX_API_KEY:
       CURSOR_API_KEY:
       # Variables of the bridge the agent may see beyond the runner's allow-list:
-      # DISABLE_AUTOUPDATER (the CLI version is pinned in the image) and COACH_HOME_LOCATION
-      # (for `coach weather`).
-      COACH_CLAUDE_PASS_ENV: ${COACH_CLAUDE_PASS_ENV:-DISABLE_AUTOUPDATER COACH_HOME_LOCATION}
-      COACH_CODEX_PASS_ENV: ${COACH_CODEX_PASS_ENV:-COACH_HOME_LOCATION}
-      COACH_CURSOR_PASS_ENV: ${COACH_CURSOR_PASS_ENV:-COACH_HOME_LOCATION}
+      # DISABLE_AUTOUPDATER (the CLI version is pinned in the image).
+      COACH_CLAUDE_PASS_ENV: ${COACH_CLAUDE_PASS_ENV:-DISABLE_AUTOUPDATER}
+      COACH_CODEX_PASS_ENV:
+      COACH_CURSOR_PASS_ENV:
       # Runner settings, passed only when set in .env (an empty value is not the same as unset).
       COACH_CLAUDE_BIN:
       COACH_CLAUDE_ARGS:

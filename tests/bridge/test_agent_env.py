@@ -41,6 +41,7 @@ EXPECTED_COACH = {
     "COACH_LANGUAGE",
     "COACH_NAME",
     "COACH_RUN_ID",
+    "COACH_HOME_LOCATION",
 }
 
 
@@ -60,7 +61,7 @@ def test_child_process_gets_only_the_agent_environment(make_harness, tmp_path, m
     )
 
     async def scenario() -> None:
-        async with make_harness(runner) as h:
+        async with make_harness(runner, bridge={"home_location": "Springfield"}) as h:
             # The service environment, as compose.yml gives it to the bridge.
             service_env = {
                 "COACH_TELEGRAM_TOKEN": TOKEN,
@@ -83,6 +84,8 @@ def test_child_process_gets_only_the_agent_environment(make_harness, tmp_path, m
             assert env["COACH_DATABASE_URL"] == h.settings.agent_database_url
             assert env["COACH_DATABASE_URL_RO"] == h.settings.database_url_ro
             assert env["COACH_RUN_ID"] == str(run_id)
+            # From the bridge itself, not from a pass-through list (COACH_CLAUDE_PASS_ENV).
+            assert env["COACH_HOME_LOCATION"] == "Springfield"
             assert env["TZ"] == "America/Chicago"
             values = "\n".join(env.values())
             for secret in (TOKEN, h.settings.database_url, "garmin-secret", "s3cret"):

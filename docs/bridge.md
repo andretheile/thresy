@@ -98,6 +98,7 @@ it the bridge passes exactly:
 | `COACH_DATA_DIR`, `COACH_WORKSPACE_DIR` | absolute paths |
 | `COACH_TZ` and `TZ` | `COACH_TZ` (so `date` in the agent's shell is local time) |
 | `COACH_LANGUAGE`, `COACH_NAME` | as configured |
+| `COACH_HOME_LOCATION` | as configured, if set (the default place of `coach weather`) |
 | `COACH_RUN_ID` | the `agent_runs.id` of this run |
 
 Never the Telegram token, the read/write database URL or the Garmin credentials;
@@ -237,7 +238,9 @@ Both learn their usage from `--help`, which is written for the agent.
 Core settings used: `COACH_DATABASE_URL`, `COACH_DATABASE_URL_RO`, `COACH_AGENT_DATABASE_URL`,
 `COACH_DATA_DIR`, `COACH_WORKSPACE_DIR`, `COACH_TZ`, `COACH_LANGUAGE`, `COACH_NAME`,
 `COACH_RUNNER` (plus the runner's own `COACH_<NAME>_*`), `COACH_TELEGRAM_TOKEN`,
-`COACH_TELEGRAM_CHAT_IDS`. The bridge's own (`thresy.bridge.settings.BridgeSettings`):
+`COACH_TELEGRAM_CHAT_IDS`, and `COACH_HOME_LOCATION` (only handed on to the agent; the setting
+belongs to `coach weather`, `thresy.tools.weather.WeatherSettings`). The bridge's own
+(`thresy.bridge.settings.BridgeSettings`):
 
 | Variable | Default | Meaning |
 |---|---|---|
