@@ -14,8 +14,8 @@
   the run starts, and names what is still missing (HRV) or possibly incomplete (the night).
 * ``new_activity`` for a run starts a post-run debrief after a short delay; uploads in a row
   are merged into one debrief.
-* ``garmin_auth_required`` and ``sync_failed`` become plain notifications (no agent run),
-  rate-limited per kind; sync failures only after a threshold.
+* ``garmin_auth_required``, ``sync_failed`` and ``backup_failed`` become plain notifications
+  (no agent run), rate-limited per kind; sync failures only after a threshold.
 * During quiet hours proactive messages wait until the window ends.
 
 An event is marked processed when it is handled (or deliberately skipped, with the reason in
@@ -145,7 +145,7 @@ class EventDispatcher:
             await self._on_sleep(event, payload, local)
         elif kind == "new_activity":
             await self._on_activity(event, payload, now)
-        elif kind in ("garmin_auth_required", "sync_failed"):
+        elif kind in ("garmin_auth_required", "sync_failed", "backup_failed"):
             if quiet:
                 self.claimed.add(event["id"])
                 self.deferred.append(event)
@@ -336,6 +336,10 @@ class EventDispatcher:
         """When the sync last succeeded (its ``sync_status`` record), as local time."""
         status = (await self.repo.sync_status()).get("sync_status")
         value = status.get("last_success_at") if isinstance(status, dict) else None
+        return self._local_time(value, now)
+
+    def _local_time(self, value: Any, now: datetime) -> str:
+        """An ISO timestamp as local time (``HH:MM`` today, else with the date)."""
         try:
             moment = datetime.fromisoformat(value) if isinstance(value, str) else None
         except ValueError:
@@ -360,6 +364,11 @@ class EventDispatcher:
         if kind == "garmin_auth_required":
             text = t(lang, "garmin_auth")
             reason = payload.get("reason")
+        elif kind == "backup_failed":
+            text = t(
+                lang, "backup_failed", since=self._local_time(payload.get("last_success_at"), now)
+            )
+            reason = payload.get("error")
         else:
             if await self._recently_notified("garmin_auth_required", now):
                 await self._mark([event["id"]], "covered-by-auth")

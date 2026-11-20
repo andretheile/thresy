@@ -354,6 +354,50 @@ def test_sync_failure_threshold_and_rate_limit(make_harness) -> None:
     asyncio.run(scenario())
 
 
+def test_backup_failure_is_reported_like_a_sync_failure(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(bridge={"bridge_briefing": False}) as h:
+            last = local(2030, 1, 1, 3, 31).astimezone(UTC).isoformat()
+            first = add_event(
+                h,
+                "backup_failed",
+                {"error": "pg_dump failed: connection refused", "last_success_at": last},
+                key="backup_failed:2030-01-02",
+            )
+            await h.tick()
+            assert h.runner.requests == []  # no agent run
+            assert h.transport.texts == [
+                "The backup failed. Last successful backup: 2030-01-01 03:31. The owner should"
+                " check the backup service (coach backup status).\n"
+                "Last error: pg_dump failed: connection refused"
+            ]
+            assert processed(h)[first] == "bridge:notified"
+            h.clock.advance(hours=2)
+            again = add_event(h, "backup_failed", {"error": "x"}, key="backup_failed:b")
+            await h.tick()
+            assert len(h.transport.texts) == 1
+            assert processed(h)[again] == "bridge:rate-limited"
+
+    asyncio.run(scenario())
+
+
+def test_backup_failure_waits_for_the_end_of_quiet_hours(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(
+            bridge={"bridge_briefing": False, "bridge_quiet_hours": "22:00-06:00"}
+        ) as h:
+            h.clock.set(local(2030, 1, 2, 3, 35))
+            add_event(h, "backup_failed", {"error": "x", "last_success_at": None})
+            await h.tick()
+            assert h.transport.texts == []
+            h.clock.set(local(2030, 1, 2, 6, 1))
+            await h.tick()
+            assert len(h.transport.texts) == 1
+            assert "Last successful backup: unknown" in h.transport.texts[0]
+
+    asyncio.run(scenario())
+
+
 def test_unknown_events_are_marked_and_left_alone(make_harness) -> None:
     async def scenario() -> None:
         async with make_harness() as h:

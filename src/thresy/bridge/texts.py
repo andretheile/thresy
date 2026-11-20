@@ -44,6 +44,10 @@ TEXTS: dict[str, dict[str, str]] = {
             "Garmin sync is failing: no successful sync since {since}. New data may be missing"
             " until it works again."
         ),
+        "backup_failed": (
+            "The backup failed. Last successful backup: {since}. The owner should check"
+            " the backup service (coach backup status)."
+        ),
         "last_error": "Last error: {error}",
         # Chat commands.
         "help": (
@@ -137,6 +141,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "sync_failed": (
             "Der Garmin-Sync schlägt fehl: kein erfolgreicher Sync seit {since}. Neue Daten"
             " können fehlen, bis er wieder läuft."
+        ),
+        "backup_failed": (
+            "Die Sicherung ist fehlgeschlagen. Letzte erfolgreiche Sicherung: {since}. Der"
+            " Betreiber sollte den Backup-Dienst prüfen (coach backup status)."
         ),
         "last_error": "Letzter Fehler: {error}",
         "help": (
