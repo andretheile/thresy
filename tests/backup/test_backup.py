@@ -55,8 +55,8 @@ def data(conn, tmp_path: Path) -> dict[str, Path]:
 
 def make_config(test_db, data: dict[str, Path], **kw: Any) -> BackupConfig:
     kw.setdefault("target", open_target(data["target"].as_uri()))
+    kw.setdefault("database_url", test_db.app_url)
     return BackupConfig(
-        database_url=test_db.app_url,
         data_dir=data["data"],
         workspace_dir=data["workspace"],
         **kw,
@@ -404,13 +404,15 @@ def test_real_restore_check_detects_a_damaged_dump(conn, test_db, data, real_pg_
     assert _no_scratch_left(conn)
 
 
-def test_restore_check_without_createdb_explains(conn, test_db, data, real_pg_bin):
-    has = conn.execute("SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user").fetchone()
-    if has["rolcreatedb"]:
-        pytest.skip("coach_app has CREATEDB on this server")
-    config = make_config(test_db, data, pg_bin_dir=real_pg_bin, target=None)
+def test_restore_check_without_createdb_explains(
+    conn, test_db, data, real_pg_bin, without_createdb
+):
+    config = make_config(
+        test_db, data, pg_bin_dir=real_pg_bin, target=None, database_url=without_createdb
+    )
     with pytest.raises(BackupError, match="CREATEDB"):
         restore_check(config)
+    assert _no_scratch_left(conn)
 
 
 def test_real_encrypted_run_restores_with_the_key(

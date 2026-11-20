@@ -1,17 +1,20 @@
 """Fixtures for the backup tests: stand-ins for age, pg_dump and the GCS client, the real
-PostgreSQL tools when they are installed, and temporary CREATEDB for coach_app."""
+PostgreSQL tools when they are installed, temporary CREATEDB for coach_app, and a role
+without it."""
 
 from __future__ import annotations
 
 import os
 import shutil
 import sys
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
+from psycopg import sql
 
 from thresy import db
 from thresy.backup import pg
@@ -156,6 +159,28 @@ def createdb(pg_server, test_db) -> Iterator[None]:
         if not had:
             with pg_server.admin() as conn:
                 conn.execute("ALTER ROLE coach_app NOCREATEDB")
+
+
+@pytest.fixture
+def without_createdb(pg_server, test_db) -> Iterator[str]:
+    """A database URL with coach_app's rights in the test database but without CREATEDB, however
+    coach_app is set up on this server (a database created by docker/postgres/initdb gives it
+    CREATEDB, an older one may not): a temporary login role that is a member of coach_app, since
+    role attributes such as CREATEDB are not inherited. Nothing shared is changed, and the role
+    is dropped afterwards."""
+    name = f"thresy_test_nocreatedb_{uuid.uuid4().hex[:12]}"
+    password = uuid.uuid4().hex
+    with pg_server.admin() as conn:
+        conn.execute(
+            sql.SQL("CREATE ROLE {} LOGIN NOCREATEDB PASSWORD {} IN ROLE coach_app").format(
+                sql.Identifier(name), sql.Literal(password)
+            )
+        )
+    try:
+        yield pg_server.url(user=name, password=password, dbname=test_db.name)
+    finally:
+        with pg_server.admin() as conn:
+            conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(name)))
 
 
 # -- a stand-in for google.cloud.storage.Client ---------------------------------------------------
