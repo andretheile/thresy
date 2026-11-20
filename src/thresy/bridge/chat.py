@@ -1,16 +1,22 @@
 """One worker per chat: one agent run at a time, later messages wait and go together.
 
 Messages that arrive while a run is in progress are collected and handed to the next run as
-one batch (not dropped, not run concurrently). Proactive jobs (briefing, debrief) queue in the
-same worker, after waiting messages; several due jobs are combined into one run so the athlete
-gets one message instead of two in a row.
+one batch (not dropped, not run concurrently). A run takes its messages when its prompt is
+built, not when the worker wakes up: everything that is waiting by then goes to that run,
+including messages the bridge is still logging (a burst of messages that queued at the
+transport while the bridge was down arrives one by one, each logged before the next). A
+message that waits for a later run is never shown to the current one as earlier context.
+Proactive jobs (briefing, debrief) queue in the same worker, after waiting messages; several
+due jobs are combined into one run so the athlete gets one message instead of two in a row.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -22,6 +28,9 @@ from .clock import Clock
 from .settings import BridgeSettings
 
 log = logging.getLogger(__name__)
+
+ARRIVAL_WAIT_S = 5.0
+"""How long a run waits at most for messages the bridge is still receiving (logging)."""
 
 
 @dataclass(frozen=True)
@@ -65,11 +74,52 @@ class ChatWorker:
         self._wake = asyncio.Event()
         self._idle = asyncio.Event()
         self._idle.set()
+        self._arriving = 0
+        self._quiet = asyncio.Event()
+        self._quiet.set()
         self.task: asyncio.Task[None] = asyncio.create_task(
             self._loop(), name=f"chat-worker:{chat_id}"
         )
 
     # -- queueing --------------------------------------------------------------------------------
+
+    @contextlib.contextmanager
+    def receiving(self) -> Iterator[None]:
+        """Around receiving one message (logging it, handing it over): a run that is about to
+        take its messages waits until this is done."""
+        self._arriving += 1
+        self._quiet.clear()
+        try:
+            yield
+        finally:
+            self._arriving -= 1
+            if self._arriving == 0:
+                self._quiet.set()
+
+    async def _received(self) -> None:
+        """Wait (at most ``ARRIVAL_WAIT_S``) until no message is being received."""
+        deadline = time.monotonic() + ARRIVAL_WAIT_S
+        while self._arriving and not self.stopping:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._quiet.wait(), remaining)
+
+    async def take_waiting(self) -> list[Pending]:
+        """The messages waiting for a run, received ones included; they leave the queue.
+        None while stopping: they stay unanswered in the log and are answered after the
+        restart, instead of joining a run that is being cancelled."""
+        await self._received()
+        if self.stopping:
+            return []
+        taken, self.pending = self.pending, []
+        return taken
+
+    async def waiting_ids(self) -> set[int]:
+        """The ``messages`` rows waiting for a later run."""
+        await self._received()
+        return {p.message_id for p in self.pending}
 
     def add_messages(self, items: list[Pending]) -> None:
         if not items or self.stopping:
@@ -123,7 +173,7 @@ class ChatWorker:
         if self.pending:
             batch, self.pending = self.pending, []
             messages = [p.message for p in batch]
-            return RunSpec(
+            spec = RunSpec(
                 chat_id=self.chat_id,
                 trigger="user_message",
                 tier=self.bs.bridge_chat_tier,
@@ -131,7 +181,16 @@ class ChatWorker:
                 proactive=False,
                 build_prompt=lambda ctx: prompts.chat_prompt(env, messages, context=ctx),
                 message_ids=[p.message_id for p in batch],
+                waiting=self.waiting_ids,
             )
+
+            async def collect() -> None:
+                for item in await self.take_waiting():
+                    messages.append(item.message)
+                    spec.message_ids.append(item.message_id)
+
+            spec.collect = collect
+            return spec
         if self.jobs:
             jobs, self.jobs = self.jobs, []
             jobs, sections = await self._sections(jobs)
@@ -150,6 +209,7 @@ class ChatWorker:
                 numbers_day=next((j.numbers_day for j in jobs if j.numbers_day), None),
                 on_start=[cb for j in jobs for cb in j.on_start],
                 on_done=[cb for j in jobs for cb in j.on_done],
+                waiting=self.waiting_ids,
             )
         return None
 

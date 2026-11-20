@@ -22,6 +22,7 @@ from datetime import date
 from typing import Any, Protocol, runtime_checkable
 
 from thresy.garmin.errors import GarminAuthError, GarminError, GarminNotFound, GarminRateLimited
+from thresy.logs import redact
 
 
 @runtime_checkable
@@ -108,19 +109,23 @@ def translate_error(exc: BaseException) -> BaseException:
 
     Exceptions that are not about talking to Garmin (``ValueError`` for a bad argument, bugs)
     are returned unchanged.
+
+    Messages are redacted (:func:`thresy.logs.redact`): they are logged, stored in
+    ``sync_state`` and events and shown to the athlete, and an exception of ``requests``
+    quotes the request URL, which during a login carries the SSO service ticket.
     """
     import garminconnect as gc
 
-    message = str(exc) or type(exc).__name__
+    message = redact(str(exc) or type(exc).__name__)
     if isinstance(exc, gc.GarminConnectTooManyRequestsError):
         return GarminRateLimited(message)
     if isinstance(exc, gc.GarminConnectAuthenticationError):
         for link in _chain(exc)[1:]:
             status = http_status(link)
             if isinstance(link, gc.GarminConnectTooManyRequestsError) or status in (427, 429):
-                return GarminRateLimited(f"{message} ({link})")
+                return GarminRateLimited(redact(f"{message} ({link})"))
             if _is_network_error(link) or (status is not None and status >= 500):
-                return GarminError(f"{message} ({link})")
+                return GarminError(redact(f"{message} ({link})"))
         return GarminAuthError(message)
     if isinstance(exc, gc.GarminConnectNotFoundError):
         return GarminNotFound(message)

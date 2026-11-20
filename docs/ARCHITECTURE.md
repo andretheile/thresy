@@ -439,6 +439,7 @@ Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat mess
 - Stay inside the paths your package owns. If you need a change elsewhere, report it instead of making it.
 - Shared files have one owner, the foundation package: `pyproject.toml`, `uv.lock`, `.env.example`, `compose.yml`, `compose.dev.yml`, `docker/`, `migrations/`, `tests/conftest.py`, `src/thresy/config.py`, `src/thresy/cli.py`. Other packages list what they need from these in their report (a dependency, a variable, a volume, a table change).
 - Do not push to any remote, and do not touch the server.
+- Logs never contain secrets. Log with the standard `logging` module and never configure it yourself: `coach` does that once (`thresy.logs`: no request logging of HTTP clients, every record redacted). Register a secret that does not come from the environment with `thresy.logs.register_secret`, and pass error texts that leave the process another way (stored in the database, sent to the chat) through `thresy.logs.redact` (docs/deploy.md, "Logs and secrets").
 - The development Mac has about 6 GB of free disk. Do not build the app image locally, do not pull large images, and do not run the full legacy import locally (use `--limit`).
 - Every package ships tests, and `uv run ruff check` and `uv run pytest` pass before you report.
 - Report honestly: what you verified by running it, what you could not verify, and every deviation from this document.

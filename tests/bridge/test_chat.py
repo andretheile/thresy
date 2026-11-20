@@ -7,6 +7,8 @@ from datetime import timedelta
 
 import pytest
 
+from thresy.bridge import prompts
+from thresy.bridge.chat import Job
 from thresy.runner import Fail, FakeRunner, Progress, Started
 
 from .conftest import CHAT, TOKEN, GatedRunner, OtherRunner
@@ -164,6 +166,111 @@ def test_messages_during_a_run_are_queued_and_handed_over_together(make_harness)
                 ("bravo", runs[1]["id"]),
                 ("charlie", runs[1]["id"]),
             ]
+
+    asyncio.run(scenario())
+
+
+BURST = ["msg-alpha", "msg-bravo", "/status", "msg-charlie", "msg-delta"]
+
+
+def test_messages_waiting_at_start_up_go_to_one_run(make_harness) -> None:
+    """Messages sent while the bridge was down arrive in one burst when it starts: the
+    transport hands them over one after another, each logged before the next. They go to one
+    run, none of them a second time as earlier context, and the command among them is answered
+    by the bridge itself."""
+
+    async def scenario() -> None:
+        async with make_harness(answering()) as h:
+            await h.say("yesterday's question")
+            await h.settle()
+            h.clock.advance(hours=24)  # a fresh session, so the prompt carries context
+            for text in BURST:
+                await h.say(text)
+            await h.settle()
+
+            assert len(h.runner.requests) == 2  # yesterday's run and one for the burst
+            prompt = h.runner.requests[1].prompt
+            context, _, waiting = prompt.partition("(end of earlier messages)")
+            assert "Athlete: yesterday's question" in context and "Coach: answer 1" in context
+            assert "sent 4 messages" in waiting
+            for text in BURST:
+                if text.startswith("/"):
+                    assert text not in prompt
+                else:
+                    assert text not in context and waiting.count(text) == 1
+
+            runs = h.rows("SELECT id, trigger FROM agent_runs ORDER BY id")
+            assert len(runs) == 2 and runs[1]["trigger"] == "user_message"
+            linked = h.rows(
+                "SELECT text, kind, run_id FROM messages WHERE direction = 'in' AND ts >= %s"
+                " ORDER BY id",
+                (h.clock.now(),),
+            )
+            assert [(m["text"], m["kind"], m["run_id"]) for m in linked] == [
+                (text, "command", None) if text == "/status" else (text, "text", runs[1]["id"])
+                for text in BURST
+            ]
+            # The command was answered without a run, the messages with one answer.
+            texts = h.transport.texts
+            assert len(texts) == 3 and texts[0] == "answer 1"
+            assert "answer 2" in texts[1:]
+            assert any(t.startswith("**Status**") for t in texts[1:])
+
+    asyncio.run(scenario())
+
+
+def test_messages_arriving_while_a_run_starts_are_not_shown_twice(make_harness) -> None:
+    """A message logged after a run took its messages, while that run is still being prepared,
+    waits for the next run: it is not shown to the first one as earlier context."""
+
+    async def scenario() -> None:
+        async with make_harness(answering()) as h:
+            await h.say("yesterday's question")
+            await h.settle()
+            h.clock.advance(hours=24)
+            service = h.bridge.service
+            original = service.context_for
+
+            async def late_message(chat_id, session, spec):
+                # Logged (and handed to the worker) after this run's prompt took its messages.
+                if not getattr(late_message, "done", False):
+                    late_message.done = True
+                    await h.say("msg-late")
+                return await original(chat_id, session, spec)
+
+            service.context_for = late_message
+            await h.say("msg-first")
+            await h.settle()
+
+            assert len(h.runner.requests) == 3
+            first, second = h.runner.requests[1].prompt, h.runner.requests[2].prompt
+            assert "msg-first" in first and "msg-late" not in first
+            assert "msg-late" in second and "msg-first" not in second
+            linked = h.rows("SELECT text, run_id FROM messages WHERE text LIKE 'msg-%%'")
+            assert len({m["run_id"] for m in linked}) == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_proactive_run_does_not_show_a_waiting_message_as_context(make_harness) -> None:
+    async def scenario() -> None:
+        async with make_harness(answering()) as h:
+            await h.say("yesterday's question")
+            await h.settle()
+            h.clock.advance(hours=24)
+
+            async def build() -> prompts.ProactiveSection:
+                await h.say("msg-during-the-briefing")  # arrives while the run is prepared
+                return prompts.ProactiveSection("morning_briefing", "Trigger: test.", "x.md", "")
+
+            h.bridge.enqueue_job(CHAT, Job(build=build, what="what_morning_briefing"))
+            await h.settle()
+
+            assert len(h.runner.requests) == 3
+            briefing, chat = h.runner.requests[1].prompt, h.runner.requests[2].prompt
+            assert "Nobody wrote" in briefing and "Athlete: yesterday's question" in briefing
+            assert "msg-during-the-briefing" not in briefing
+            assert "msg-during-the-briefing" in chat
 
     asyncio.run(scenario())
 

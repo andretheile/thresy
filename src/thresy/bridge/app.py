@@ -233,6 +233,15 @@ class Bridge:
         if not self.transport.allows(msg.chat_id):  # transports drop these already
             log.warning("dropped a message from chat %s: not allow-listed", msg.chat_id)
             return
+        if self.stopping:
+            await self._receive(msg)  # logged; answered after the restart
+            return
+        # A run of this chat that is about to take its messages waits until this one is logged
+        # and handed over: messages that arrive in a burst go to one run.
+        with self.worker(msg.chat_id).receiving():
+            await self._receive(msg)
+
+    async def _receive(self, msg: InboundMessage) -> None:
         chat_id = msg.chat_id
         command = parse_command(msg.text) if msg.kind == "text" else None
         if command is not None:

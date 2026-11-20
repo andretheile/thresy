@@ -145,6 +145,36 @@ def test_complete_mfa_without_or_with_an_expired_waiting_login(offline, login) -
         login.complete_mfa("  ", now=NOW)
 
 
+def test_errors_never_carry_the_sso_ticket_or_the_password(login) -> None:
+    """``requests`` quotes the request URL in its errors; while a login exchanges its SSO
+    service ticket that URL holds the ticket, and the error text is logged, stored and shown
+    to the athlete."""
+    ticket = "ST-0000-FAKE-ticket-cas"
+
+    class TicketExchangeFails:
+        def resume_login(self, state, code):
+            raise requests.ConnectionError(
+                "HTTPSConnectionPool(host='connect.example.invalid', port=443): Max retries "
+                f"exceeded with url: /app?ticket={ticket} (Caused by NewConnectionError('x'))"
+            )
+
+    with pytest.raises(GarminError) as info:
+        login.complete_mfa(GOOD_CODE, now=NOW, garmin=TicketExchangeFails())
+    assert ticket not in str(info.value) and "ticket=<redacted>" in str(info.value)
+
+    # A password typed in (not in the environment) is redacted from then on as well.
+    password = "fake-typed-password-0000"
+
+    class EchoesThePassword:
+        def login(self):
+            raise ValueError(f"login form rejected: {password}")
+
+    echo = GarminLogin(login.store, factory=lambda **_kw: EchoesThePassword())
+    with pytest.raises(GarminError) as info:
+        echo.start_password_login("athlete@example.invalid", password, now=NOW)
+    assert password not in str(info.value) and "<redacted>" in str(info.value)
+
+
 def test_pending_file_round_trip_and_garbage(tmp_path) -> None:
     store = TokenStore(tmp_path / "garmin")
     assert store.load_pending_mfa() is None

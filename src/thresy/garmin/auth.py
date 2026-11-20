@@ -40,6 +40,7 @@ from typing import Any
 
 from thresy.garmin.client import ConnectClient, translate_error
 from thresy.garmin.errors import GarminAuthError, GarminError
+from thresy.logs import redact, register_secret
 
 TOKEN_FILE = "garmin_tokens.json"  # the file name garminconnect uses inside a token directory
 MFA_FILE = "mfa_pending.json"
@@ -198,6 +199,7 @@ class GarminLogin:
         Raises :class:`GarminAuthError` (wrong credentials, locked account),
         :class:`~thresy.garmin.errors.GarminRateLimited` or :class:`GarminError`.
         """
+        register_secret(password)  # e.g. typed in by `coach sync login`, not in the environment
         self.store.ensure_private()
         self.store.clear_pending_mfa()
         garmin = self.factory(email=email, password=password, return_on_mfa=True)
@@ -246,7 +248,7 @@ class GarminLogin:
         try:
             garmin.client.dump(str(self.store.directory))
         except Exception as exc:
-            raise GarminError(f"could not save the Garmin tokens: {exc}") from exc
+            raise GarminError(redact(f"could not save the Garmin tokens: {exc}")) from exc
         self.store.ensure_private()
 
 
@@ -255,4 +257,4 @@ def _as_garmin_error(exc: Exception) -> Exception:
     if isinstance(translated, GarminError):
         return translated
     # Anything else from the login (a ValueError for a bad token path, ...) is a failed login.
-    return GarminError(f"{type(exc).__name__}: {exc}")
+    return GarminError(redact(f"{type(exc).__name__}: {exc}"))

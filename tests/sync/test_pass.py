@@ -369,6 +369,23 @@ def test_bugs_in_a_pass_are_failures_not_crashes(conn, config, fake) -> None:
     assert second.error_kind == "error" and "KeyError" in second.error
 
 
+def test_stored_errors_are_redacted(conn, config, fake) -> None:
+    """The error of a failed pass is stored, raised as ``sync_failed`` and shown to the
+    athlete; an unexpected exception can quote a URL with credentials."""
+    leak = RuntimeError("proxy http://user:fake-proxy-pw-0000@proxy.invalid:3128 refused")
+    fake.fail("get_activities_by_date", *[leak] * 5)
+    outcomes = [sync_once(conn, config, StaticProvider(fake), now=at(6, m)) for m in range(5)]
+    assert outcomes[-1].error_kind == "error"
+    stored = [
+        outcomes[-1].error,
+        state.get(conn, state.STATUS)["last_error"],
+        events(conn, "sync_failed")[0]["payload"]["error"],
+    ]
+    for text in stored:
+        assert "fake-proxy-pw-0000" not in text
+        assert "http://user:<redacted>@proxy.invalid" in text
+
+
 def test_auth_problems_have_their_own_event(conn, config, fake) -> None:
     provider = StaticProvider(fake)
     provider.error = GarminAuthRequired("no_credentials", "log in please")

@@ -41,13 +41,13 @@ from telegram.error import (
     ChatMigrated,
     Forbidden,
     InvalidToken,
-    NetworkError,
     RetryAfter,
     TelegramError,
 )
 from telegram.ext import Application, ApplicationBuilder, ContextTypes, TypeHandler
 from telegram.warnings import PTBDeprecationWarning
 
+from thresy.logs import redact, register_secret
 from thresy.transport.base import (
     MAX_DOCUMENT_BYTES,
     MAX_PHOTO_BYTES,
@@ -63,6 +63,7 @@ from .markdown import CAPTION_LIMIT, Rich, format_markdown, plain, utf16_len
 
 log = logging.getLogger(__name__)
 
+API_URL = "https://api.telegram.org"
 DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024  # Bot API getFile limit
 TYPING_INTERVAL_S = 4.0  # a chat action lasts about 5 s
 CHOICE_PREFIX = "c"
@@ -97,14 +98,16 @@ def _retry_after_s(exc: RetryAfter) -> float:
 
 
 def classify_error(exc: TelegramError) -> DeliveryError:
-    """Map a Telegram error to a permanent or transient :class:`DeliveryError`."""
+    """Map a Telegram error to a permanent or transient :class:`DeliveryError`.
+
+    The text is redacted: it ends up in ``outbox.error``, which the agent can read, and an
+    error of the HTTP layer can quote the request URL, which holds the bot token."""
     if isinstance(exc, RetryAfter):
-        return DeliveryError(str(exc), permanent=False, retry_after_s=_retry_after_s(exc))
+        return DeliveryError(redact(str(exc)), permanent=False, retry_after_s=_retry_after_s(exc))
+    text = redact(f"{type(exc).__name__}: {exc}")
     if isinstance(exc, BadRequest | Forbidden | InvalidToken | ChatMigrated):
-        return DeliveryError(f"{type(exc).__name__}: {exc}", permanent=True)
-    if isinstance(exc, NetworkError):  # includes TimedOut
-        return DeliveryError(f"{type(exc).__name__}: {exc}", permanent=False)
-    return DeliveryError(f"{type(exc).__name__}: {exc}", permanent=False)
+        return DeliveryError(text, permanent=True)
+    return DeliveryError(text, permanent=False)  # NetworkError (and TimedOut) included
 
 
 class TelegramTransport:
@@ -117,11 +120,18 @@ class TelegramTransport:
         inbox_dir: Path,
         *,
         bot: Any | None = None,
+        api_url: str = API_URL,
     ) -> None:
-        """``bot`` replaces the real :class:`telegram.Bot` (tests pass a recording fake)."""
+        """``bot`` replaces the real :class:`telegram.Bot` (tests pass a recording fake);
+        ``api_url`` is the Bot API server (a local Bot API server, or a fake in tests).
+
+        The token is part of every request URL; it is registered with :mod:`thresy.logs` so
+        that no log line of this process can show it."""
         if not chat_ids:
             raise ValueError("no allow-listed chat ids (COACH_TELEGRAM_CHAT_IDS)")
+        register_secret(token)
         self._token = token
+        self._api_url = api_url.rstrip("/")
         self._chat_ids = tuple(str(c).strip() for c in chat_ids)
         self.inbox_dir = inbox_dir
         self._bot: Any = bot
@@ -141,12 +151,22 @@ class TelegramTransport:
     @property
     def bot(self) -> Any:
         if self._bot is None:
-            self._bot = Bot(self._token)
+            self._bot = Bot(
+                self._token,
+                base_url=f"{self._api_url}/bot",
+                base_file_url=f"{self._api_url}/file/bot",
+            )
         return self._bot
 
     async def start(self, on_message: MessageHandler) -> None:
         self._handler = on_message
-        app = ApplicationBuilder().token(self._token).build()
+        app = (
+            ApplicationBuilder()
+            .token(self._token)
+            .base_url(f"{self._api_url}/bot")
+            .base_file_url(f"{self._api_url}/file/bot")
+            .build()
+        )
         app.add_handler(TypeHandler(Update, self._on_update))
         app.add_error_handler(self._on_error)
         self._app = app
@@ -497,8 +517,9 @@ class TelegramTransport:
             tg_file = await self.bot.get_file(file_id)
             data = bytes(await tg_file.download_as_bytearray())
         except (TelegramError, OSError) as exc:
+            # The download URL holds the token; the error is shown to the agent.
             log.warning("telegram: could not download a %s: %s", kind, exc)
-            return Attachment(path=None, error=f"download failed: {exc}", **common)
+            return Attachment(path=None, error=redact(f"download failed: {exc}"), **common)
         try:
             target = await asyncio.to_thread(self._save, day, message.message_id, safe, data)
         except (FileRefused, OSError) as exc:

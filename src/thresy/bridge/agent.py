@@ -96,6 +96,12 @@ class RunSpec:
     on_done: list[Callable[[RunResult | None], Awaitable[None]]] = field(default_factory=list)
     effort: Effort | None = None
     """Reasoning effort for the runner; None: the harness's default."""
+    collect: Callable[[], Awaitable[None]] | None = None
+    """Called right before the prompt is built: adds the messages that are waiting for this
+    chat by then to this run (``message_ids`` and the prompt)."""
+    waiting: Callable[[], Awaitable[set[int]]] | None = None
+    """The ``messages`` rows received for this chat that wait for a later run; they are left
+    out of the context block (the agent sees them once, as messages to answer)."""
 
 
 @dataclass(frozen=True)
@@ -221,6 +227,10 @@ class AgentService:
         rows = await self.repo.recent_messages(
             chat_id, since, spec.message_ids, self.bs.bridge_context_messages, after_id
         )
+        if spec.waiting is not None:
+            # Asked after the query: a message logged before it is in the worker by then.
+            waiting = await spec.waiting()
+            rows = [row for row in rows if row["id"] not in waiting]
         return prompts.context_block(self.prompt_env, rows, self.bs.bridge_context_chars)
 
     # -- runs ------------------------------------------------------------------------------------
@@ -277,6 +287,8 @@ class AgentService:
     async def _attempt(
         self, spec: RunSpec, session: dict[str, Any], resume: str | None
     ) -> tuple[RunResult, int]:
+        if spec.collect is not None:
+            await spec.collect()  # messages waiting by now go to this run, not the next one
         context = None if resume else await self.context_for(spec.chat_id, session, spec)
         prompt = spec.build_prompt(context)
         run_id = await self.repo.create_run(session["id"], spec.trigger, self.runner.name)

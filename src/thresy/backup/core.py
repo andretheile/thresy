@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from thresy import db, store
+from thresy.logs import redact
 
 from . import crypto, pg
 from .targets import Target, TargetError
@@ -241,7 +242,9 @@ def _save_fit_state(conn: store.Conn, config: BackupConfig, files: dict[str, str
 
 
 def record_failure(config: BackupConfig, error: str, *, notify: bool = True) -> None:
-    """Record a failed run and raise ``backup_failed`` (at most one per UTC day)."""
+    """Record a failed run and raise ``backup_failed`` (at most one per UTC day). The error is
+    redacted first: the event's text is sent to the athlete."""
+    error = redact(error)
     try:
         with db.connect(config.database_url) as conn:
             status = get_status(conn)
