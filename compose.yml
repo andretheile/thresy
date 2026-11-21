@@ -154,6 +154,15 @@ services:
       COACH_LANGUAGE: ${COACH_LANGUAGE:-en}
       COACH_NAME: ${COACH_NAME:-Thresy}
       COACH_HOME_LOCATION: # handed to the agent by the bridge (for `coach weather`)
+      # `coach route` (docs/routes.md), handed to the agent by the bridge when set. The routing
+      # key can instead go into the agent's credential file, so it is not in the bridge's
+      # environment at all (docs/deploy.md, "Routes").
+      COACH_ROUTE_PROVIDER:
+      COACH_ROUTE_URL:
+      COACH_ROUTE_API_KEY:
+      COACH_ROUTE_TILE_URL:
+      COACH_ROUTE_TILE_ATTRIBUTION:
+      COACH_ROUTE_TILE_CACHE_DIR:
       COACH_RUNNER: ${COACH_RUNNER:-claude}
       COACH_AGENT_USER: ${COACH_AGENT_USER-agent}
       # Fixed here so that nothing else (a .env file) can point it somewhere else.

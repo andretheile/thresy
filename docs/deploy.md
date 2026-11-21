@@ -66,6 +66,9 @@ They take effect when the database volume is created (step 6); changing them lat
   night" mean.
 - `COACH_LANGUAGE` (`en`, `de`, ...) and `COACH_NAME` (what the coach calls itself).
 - `COACH_HOME_LOCATION` for `coach weather`, if you want weather in the briefings.
+- Routes (optional, docs/routes.md): `COACH_ROUTE_URL` for a self-hosted openrouteservice, and
+  `COACH_ROUTE_TILE_URL=none` if the route pictures should fetch no OpenStreetMap tiles. The
+  routing key is better placed in the agent's credential file (step 9, "Routes").
 - Leave the Garmin, Telegram and backup values for their steps below.
 
 ## 4. Choose and pin the agent CLI
@@ -214,6 +217,40 @@ shows the date.
 `docker compose run --rm --no-deps --user agent bridge codex login --device-auth` (stores
 `~/.codex/auth.json` in the agent's home). **Cursor**: `CURSOR_API_KEY=<key>` in the file. Set
 `COACH_RUNNER` in `.env` accordingly.
+
+### Routes (optional)
+
+`coach route plan` needs a routing service (docs/routes.md). With the hosted openrouteservice,
+create a free account at <https://account.heigit.org/>, request a token on the Standard plan in
+its dashboard, and add the key to the agent's credential file. Append it (`>>`), so the model
+credential in the same file stays:
+
+```sh
+docker compose run --rm --no-deps --user agent bridge sh -c '
+  umask 077
+  printf "Routing key: "; stty -echo; read -r key; stty echo; echo
+  printf "COACH_ROUTE_API_KEY=%s\n" "$key" >> /home/agent/.thresy/credentials.env
+  echo saved'
+```
+
+There the key reaches only the agent's own processes, never the bridge's environment. Setting
+`COACH_ROUTE_API_KEY` in `.env` also works (the bridge then hands it to the agent). It is the one
+kind of key the agent may hold: it grants nothing but queries, so use an account for nothing
+else. To replace it, edit the file as the agent user (`docker compose run --rm --no-deps --user
+agent bridge vi /home/agent/.thresy/credentials.env`, if the image has an editor, or rewrite the
+file with both lines). A self-hosted instance needs no key: set `COACH_ROUTE_URL` in `.env`
+instead. Check it once the stack runs:
+
+```sh
+docker compose run --rm --no-deps --user agent bridge sh -c \
+  'set -a; . /home/agent/.thresy/credentials.env; set +a; cd /tmp &&
+   COACH_WORKSPACE_DIR=/tmp/w COACH_ROUTE_TILE_URL=none \
+   coach route plan --start 49.41461,8.681495 --distance 5 --candidates 1'
+```
+
+It should print one loop of about 5 km (the start is openrouteservice's own documentation
+example). Without a routing service `coach route show` and `coach route export` still work, and
+`coach route plan` says what to set.
 
 ## 10. Telegram
 
@@ -379,7 +416,9 @@ Every service logs to its container's output (`docker compose logs <service>`, c
 per container), at INFO; one-off commands take `-v` for DEBUG. Anyone who can run
 `docker logs` on the host can read these logs, so they must not contain a secret: not the
 Telegram bot token, the database passwords, the Garmin password, Garmin's session tokens and
-login tickets, or the model credential. How (`src/thresy/logs.py`):
+login tickets, the model credential, or the routing key (`COACH_ROUTE_API_KEY`, which is also
+registered as a secret by `coach route` itself and sent only in a request header). How
+(`src/thresy/logs.py`):
 
 - **No request logging.** The HTTP client libraries log request URLs, and python-telegram-bot
   puts the bot token into every URL. Their loggers are held at a fixed level, also with `-v`:
