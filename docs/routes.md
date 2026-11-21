@@ -88,6 +88,9 @@ How candidates are made, with at most **10 requests per call** (`--candidates` 1
   from the missing distance and corrected over up to three requests. The leg inside a stored
   segment never gets a detour. A route already longer than the target stays as it is, and the
   report says by how much it is over.
+- **`--warmup KM`** puts the first via point (a segment's start) at least KM into the route with
+  a detour before it (up to 3 of the 10 requests), adds the rest of the distance after it, and
+  says in a note when the cap did not allow it (`first_via_km` and `warmup_met` in `--json`).
 
 Candidates are ranked: within the tolerance first, then by `--prefer` (`familiar`: most ground run
 before, `new`: least, compared in steps of 10 %), loops before out-and-back shapes, then by the

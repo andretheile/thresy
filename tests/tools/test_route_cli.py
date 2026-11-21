@@ -234,6 +234,35 @@ def test_plan_through_a_segment_with_a_distance(conn, history, workspace, env, o
     assert shares == sorted(shares, reverse=True)
 
 
+def test_plan_with_a_warmup_before_the_segment(conn, history, workspace, env, ors) -> None:
+    # The stored segment starts 1 km from the usual start; 2.5 km easy are asked first.
+    args = ["plan", "--via", "segment:hill", "--distance", "9", "--warmup", "2.5", "--json"]
+    data = json.loads(run(args, env).output)
+    assert data["warmup_km"] == 2.5 and data["provider"]["requests"] <= MAX_REQUESTS
+    first = data["candidates"][0]
+    assert first["warmup_met"] and first["first_via_km"] >= 2.5 and first["close_to_target"]
+    (hill,) = [p for p in first["segments"] if p["key"] == "hill"]
+    assert hill["direction"] == "forward" and hill["from_km"] >= 2.5
+    assert not any("warm-up" in w for w in first["warnings"])
+    seg_start = [round(HILL.start_lon, 6), round(HILL.start_lat, 6)]
+    seg_end = [round(HILL.end_lon, 6), round(HILL.end_lat, 6)]
+    for body in ors.bodies:  # never a detour inside the segment
+        coords = body["coordinates"]
+        assert coords[coords.index(seg_start) + 1] == seg_end
+    text = run(args[:-1], env).output
+    assert "warm-up: at least 2.5 km before the first via point" in text
+
+
+def test_plan_says_when_the_warmup_cannot_be_reached(conn, history, workspace, env, ors) -> None:
+    ors.refuse_detours = True
+    args = ["plan", "--via", "segment:hill", "--warmup", "2.5", "--candidates", "1"]
+    out = run(args, env).output
+    assert "- the 2.5 km warm-up was not reached within the request cap" in out
+    assert "- route 1 reaches segment hill (Hill climb) at km 1.0, before the 2.5 km warm-up" in out
+    data = json.loads(run([*args, "--json"], env).output)
+    assert data["candidates"][0]["warmup_met"] is False
+
+
 def test_plan_says_when_a_segment_was_not_run_as_asked(conn, history, workspace, env, ors) -> None:
     # The fake service takes a dogleg between points 1.5 km apart: not the stored segment.
     ridge = SegmentDef(

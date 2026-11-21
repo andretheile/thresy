@@ -450,6 +450,67 @@ def test_no_detour_inside_a_segment_and_no_shortening(ors) -> None:
     assert "already 19.2 km, more than the 10 km target" in planned.notes[0]
 
 
+# A segment that starts 400 m from the start, run from 0.4 to 1.4 km without a warm-up.
+CLOSE_SEGMENT = rp.Via((offset(ORIGIN, 0, 400), offset(ORIGIN, 0, 1400)), "segment near", "near")
+
+
+def warm_request(warmup_m: float | None, **kw) -> rp.PlanRequest:
+    values = {"distance_m": 10_000, "candidates": 3, **kw}
+    return rp.PlanRequest(start=START, end=None, vias=[CLOSE_SEGMENT], warmup_m=warmup_m, **values)
+
+
+def assert_segment_kept_whole(bodies: list[dict]) -> None:
+    seg_start, seg_end = ([round(p[1], 6), round(p[0], 6)] for p in CLOSE_SEGMENT.points)
+    for body in bodies:
+        coords = body["coordinates"]
+        assert coords[coords.index(seg_start) + 1] == seg_end  # no detour inside the segment
+
+
+def test_warmup_puts_the_segment_later_and_still_aims_for_the_distance(ors) -> None:
+    service, fake = ors
+    plain = rp.plan(service, warm_request(None))
+    assert rp.first_via_m(plain.paths[0], CLOSE_SEGMENT.points[0]) == pytest.approx(400, abs=30)
+    fake.bodies.clear()
+    planned = rp.plan(service, warm_request(3000))
+    assert planned.requests == len(fake.bodies) <= rp.MAX_REQUESTS
+    assert_segment_kept_whole(fake.bodies)
+    good = [
+        p
+        for p in planned.paths
+        if rp.first_via_m(p, CLOSE_SEGMENT.points[0]) >= 3000
+        and abs(p.track.length_m() - 10_000) <= 250
+    ]
+    assert good, [round(p.track.length_m()) for p in planned.paths]
+    # the warm-up detour comes before the segment; the distance detours after it
+    for path in good:
+        points = path.query.points
+        assert points.index(CLOSE_SEGMENT.points[0]) == 2
+    assert not any("warm-up" in n for n in planned.notes)
+
+
+def test_warmup_that_cannot_be_reached_says_so(ors) -> None:
+    service, fake = ors
+    fake.refuse_detours = True  # no path near any detour point
+    planned = rp.plan(service, warm_request(3000))
+    assert planned.requests <= rp.MAX_REQUESTS
+    assert all(rp.first_via_m(p, CLOSE_SEGMENT.points[0]) < 3000 for p in planned.paths)
+    assert "the 3 km warm-up was not reached within the request cap" in planned.notes[0]
+    assert "segment near at km 0.4" in planned.notes[0]
+    assert_segment_kept_whole(fake.bodies)
+
+
+def test_warmup_respects_the_request_cap(ors) -> None:
+    service, fake = ors
+    planned = rp.plan(service, warm_request(3000, candidates=5), max_requests=3)
+    assert len(fake.bodies) == planned.requests == 3
+    planned = rp.plan(service, warm_request(3000), max_requests=1)
+    assert "the 3 km warm-up was not reached" in planned.notes[0]
+    planned = rp.plan(
+        service, rp.PlanRequest(start=START, end=None, distance_m=8000, warmup_m=2000)
+    )
+    assert "--warmup applies to the first --via point or segment" in planned.notes[-1]
+
+
 def test_alternatives_for_start_and_end(ors) -> None:
     service, fake = ors
     end = Point(*offset(ORIGIN, 3000, 0), "end")
@@ -585,9 +646,15 @@ DENSE = known_from_lines(
 SPARSE = known_from_lines([((0, -4000), (0, 4000)), ((-3000, 1500), (3000, 1500))])
 # Half on the grid, half east of it; a stored segment from 400 m after the start.
 PART_KNOWN = [
-    (0, 0), (0, 1500), (2400, 1500), (4500, 1500), (4500, -1050), (2400, -1050), (0, -1050),
     (0, 0),
-]  # fmt: skip
+    (0, 1500),
+    (2400, 1500),
+    (4500, 1500),
+    (4500, -1050),
+    (2400, -1050),
+    (0, -1050),
+    (0, 0),
+]
 NEAR_START = SegmentDef(
     "near",
     "Hill near home",

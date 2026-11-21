@@ -16,7 +16,7 @@ When it adds something: a long run longer than their usual loops, a session that
 
 ## A segment inside a session
 
-- `--via segment:KEY` runs the stored climb from its start to its end; the report says where it starts and ends (km from, km to). Hard efforts on it need a warm-up first, about 2 to 3 km easy: if the segment starts earlier, pick a candidate where it comes later or start elsewhere.
+- `--via segment:KEY` runs the stored climb from its start to its end; the report says where it starts and ends (km from, km to). Hard efforts on it need a warm-up first, about 2 to 3 km easy: `--warmup 3` puts the segment at least 3 km in, and a note says when that was not possible.
 - Give a target from the athlete's own efforts on it: `coach analysis segments history KEY` (best, recent ones, pace at a common heart rate), not a generic one.
 - Write it into the plan with the place in km: `coach plan add sun "Long run with Ridge" -d "6 km easy, Ridge from km 6.4 at threshold effort, easy home"`.
 
