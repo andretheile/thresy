@@ -34,7 +34,8 @@ M_PER_DEG = 111320.0
 """Metres per degree of latitude (and of longitude at the equator), as in thresy.analysis."""
 
 HOSTED_ORS_URL = "https://api.heigit.org/openrouteservice"
-"""The hosted openrouteservice API (api.openrouteservice.org was retired in November 2026)."""
+"""The hosted openrouteservice API (api.openrouteservice.org was deprecated in its favour in
+April 2026)."""
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 TILES_OFF = frozenset({"none", "off", "false", "no", "0"})
