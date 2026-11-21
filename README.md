@@ -28,6 +28,10 @@ through an unofficial community library, which can stop working at any time.
   Unix user, and never sees the Garmin, Telegram or database credentials of the services.
 - **Backup** dumps the database and uploads it, the FIT files and the coach's memory files and
   kept scripts to a bucket with a create-only credential, optionally encrypted with age.
+- **Routes**: the coach plans running routes with openrouteservice (a free key, or your own
+  instance) and hands them over as GPX files with a map picture, reads GPX files you send it, and
+  says how much of a route you have run before (computed from your data, locally). You import
+  the files into komoot or Garmin Connect yourself ([docs/routes.md](docs/routes.md)).
 - Everything runs as one Docker Compose stack with no published ports.
 
 The design, database contract and rules for contributors are in
@@ -162,11 +166,20 @@ leave `ANTHROPIC_API_KEY` unset. Backups: [docs/backup.md](docs/backup.md).
   trademarks of Garmin Ltd. or its subsidiaries.
 - **Weather** comes from [Open-Meteo](https://open-meteo.com/), whose data is licensed under
   CC BY 4.0 and whose free service is for non-commercial use.
+- **Routes** are computed by [openrouteservice](https://openrouteservice.org/) (© openrouteservice.org
+  by HeiGIT; results licensed CC BY 4.0) on map data © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+  contributors (ODbL). A route request sends the routing service the coordinates of the start,
+  the points to pass and the end (the usual start is often your home), and nothing else: no
+  history, names or activity ids. Route pictures use the standard OpenStreetMap tiles by default,
+  a few per picture, cached, within the
+  [tile usage policy](https://operations.osmfoundation.org/policies/tiles/); the tile server sees
+  which area is shown. `COACH_ROUTE_TILE_URL=none` switches them off. Thanks to both projects and
+  to everyone who maps.
 - **Libraries** this project leans on most: [fitparse](https://github.com/dtcooper/python-fitparse)
   for FIT files, [python-telegram-bot](https://python-telegram-bot.org/) for the chat,
   [psycopg](https://www.psycopg.org/) for Postgres.
-- **Other names.** Telegram, Claude, Codex, Cursor, Grok, Muse and Dots are products of their
-  respective owners, with which this project has no affiliation.
+- **Other names.** Telegram, Claude, Codex, Cursor, Grok, komoot, Muse and Dots are products of
+  their respective owners, with which this project has no affiliation.
 - **Not medical advice.** The coach is software that reads training data. It is not a doctor
   or a physiotherapist, and what it says is no substitute for one.
 

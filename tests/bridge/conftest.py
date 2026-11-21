@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -140,6 +141,24 @@ def make_bridge_settings(**overrides: Any) -> BridgeSettings:
     }
     values.update(overrides)
     return BridgeSettings(_env_file=None, **values)
+
+
+@pytest.fixture(autouse=True)
+def no_route_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """None of the developer's ``COACH_ROUTE_*`` values: the bridge hands the agent those it
+    finds in its environment and ``.env`` (``thresy.tools.route.RouteSettings``). Here only the
+    environment counts, so a test sets a value with ``monkeypatch.setenv``."""
+    from pydantic_settings import SettingsConfigDict
+
+    from thresy.tools import route
+
+    for name in [n for n in os.environ if n.startswith("COACH_ROUTE_")]:
+        monkeypatch.delenv(name)
+
+    class RouteSettingsWithoutDotenv(route.RouteSettings):
+        model_config = SettingsConfigDict(**{**route.RouteSettings.model_config, "env_file": None})
+
+    monkeypatch.setattr(route, "RouteSettings", RouteSettingsWithoutDotenv)
 
 
 @pytest.fixture

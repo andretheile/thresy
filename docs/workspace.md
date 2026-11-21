@@ -14,6 +14,7 @@ playbooks/
   post-run.md        debrief after an upload                   named by the debrief prompt
   week-plan.md       planning a week or block                  read on demand
   race-prep.md       deciding, preparing, racing, recovering   read on demand
+  routes.md          planning a route, reading one sent        read on demand
   onboarding.md      a new athlete with empty memory           read on demand
   scripts.md         writing and keeping analysis scripts      read on demand
 memory/              athlete.md, places.md, fitness.md, preferences.md, goals.md, journal.md
@@ -31,7 +32,7 @@ them.
 - **`AGENTS.md`** is in the context of every run on every harness (Claude Code through the
   `CLAUDE.md` import, Codex and Cursor natively). Its length is paid on every run, so it holds
   only what every run needs: the situation, how the coach knows things, the judgment calls that
-  go wrong, how it talks, the bridge mechanics, memory and limits (about 2,300 words now). It
+  go wrong, how it talks, the bridge mechanics, memory and limits (about 2,350 words now). It
   explains reasons rather than issuing bare rules, so the coach can apply them to cases they do
   not name.
 - **Playbooks** are read when a prompt names one (`Follow playbooks/chat.md.`) or when the brief
@@ -166,6 +167,11 @@ JSON with `--json`, and accept days as `YYYY-MM-DD`, `today`, `tomorrow`, `yeste
   line), `result` (`--time` with `--source official|reported`, otherwise the linked activity's
   timer time labelled `watch`; `--activity auto` links the longest run that day), `delete`.
   Status: `planned`, `maybe`, `done`, `dnf`, `dns`; priority A, B, C.
+
+`coach route plan|show|export` (`thresy.tools.route_cli`) makes route files: candidates from a
+routing service, the report of a GPX the athlete sent, a past run as a GPX file, each with a
+line in words and optionally a picture. The brief lists it and sends the coach to
+`playbooks/routes.md`; settings and what leaves the machine are in docs/routes.md.
 
 ## Adapting the template
 

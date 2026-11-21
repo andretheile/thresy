@@ -168,8 +168,12 @@ class AgentService:
         """Exactly what the agent's ``coach`` commands need, on top of the runner's allow-list.
 
         Never the Telegram token, never the read/write database URL: the agent gets the
-        ``coach_agent`` URL as its ``COACH_DATABASE_URL`` and the ``coach_ro`` URL.
+        ``coach_agent`` URL as its ``COACH_DATABASE_URL`` and the ``coach_ro`` URL. The set
+        ``COACH_ROUTE_*`` values go along for ``coach route``, the routing key included: the
+        one kind of key the agent may hold (docs/ARCHITECTURE.md, principle 7).
         """
+        from thresy.tools.route import agent_route_env
+
         s = self.settings
         env = {
             "COACH_DATABASE_URL": s.require_agent_database_url(),
@@ -185,6 +189,7 @@ class AgentService:
             env["COACH_DATABASE_URL_RO"] = s.database_url_ro
         if self.bs.home_location and self.bs.home_location.strip():
             env["COACH_HOME_LOCATION"] = self.bs.home_location.strip()
+        env.update(agent_route_env())
         return env
 
     # -- sessions --------------------------------------------------------------------------------
