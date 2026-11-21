@@ -33,6 +33,7 @@ from thresy.tools.route import (
     simplify_to,
     write_gpx,
 )
+from thresy.tools.route_history import Grid, Known
 from thresy.tools.route_provider import OpenRouteService, RouteQuery, RoutingError
 
 from .route_fakes import ORIGIN, FakeORS, FakeTiles, mock_client, offset
@@ -218,6 +219,34 @@ def test_retraced_tells_a_loop_from_a_there_and_back() -> None:
     assert lolli["summary"].startswith("a loop with out-and-back parts (25% retraced)")
     one_way = rr.measure(track([(0, 0), (3000, 0), (3000, 2000)]), known=None, segments=[])
     assert not one_way["loop"] and one_way["summary"].startswith("point to point, 5.0 km")
+
+
+def test_title_and_report_share_one_source_for_the_shape(monkeypatch) -> None:
+    from thresy.analysis.plots import LABELS
+    from thresy.config import get_settings
+    from thresy.tools.route_cli import _title
+
+    # 6 km out, 3.5 km back: ends 2.5 km from the start, 7 of 9.5 km on the same way
+    report = rr.measure(track([(0, 0), (6000, 0), (2500, 0)]), known=None, segments=[])
+    assert rr.shape_kind(report) == "oneway_mostly_back"
+    assert report["summary"].startswith("point to point, mostly retracing itself (73% retraced)")
+    monkeypatch.chdir(Path(__file__).parent)  # no .env
+    for lang, words in (
+        ("de", "von A nach B, größtenteils auf demselben Weg zurück"),
+        ("en", "point to point, mostly retracing itself"),
+    ):
+        monkeypatch.setenv("COACH_LANGUAGE", lang)
+        get_settings.cache_clear()
+        try:
+            assert _title(1, report).endswith(" · " + words)
+        finally:
+            get_settings.cache_clear()
+    kinds = {
+        f"route_shape_{base}{tail}"
+        for base in ("loop", "oneway")
+        for tail in ("", "_parts", "_mostly_back", "_back")
+    }
+    assert all(kinds <= set(LABELS[lang]) for lang in LABELS)
 
 
 def test_ascent_from_the_profile_and_hill_words() -> None:
@@ -421,6 +450,67 @@ def test_no_detour_inside_a_segment_and_no_shortening(ors) -> None:
     assert "already 19.2 km, more than the 10 km target" in planned.notes[0]
 
 
+# A segment that starts 400 m from the start, run from 0.4 to 1.4 km without a warm-up.
+CLOSE_SEGMENT = rp.Via((offset(ORIGIN, 0, 400), offset(ORIGIN, 0, 1400)), "segment near", "near")
+
+
+def warm_request(warmup_m: float | None, **kw) -> rp.PlanRequest:
+    values = {"distance_m": 10_000, "candidates": 3, **kw}
+    return rp.PlanRequest(start=START, end=None, vias=[CLOSE_SEGMENT], warmup_m=warmup_m, **values)
+
+
+def assert_segment_kept_whole(bodies: list[dict]) -> None:
+    seg_start, seg_end = ([round(p[1], 6), round(p[0], 6)] for p in CLOSE_SEGMENT.points)
+    for body in bodies:
+        coords = body["coordinates"]
+        assert coords[coords.index(seg_start) + 1] == seg_end  # no detour inside the segment
+
+
+def test_warmup_puts_the_segment_later_and_still_aims_for_the_distance(ors) -> None:
+    service, fake = ors
+    plain = rp.plan(service, warm_request(None))
+    assert rp.first_via_m(plain.paths[0], CLOSE_SEGMENT.points[0]) == pytest.approx(400, abs=30)
+    fake.bodies.clear()
+    planned = rp.plan(service, warm_request(3000))
+    assert planned.requests == len(fake.bodies) <= rp.MAX_REQUESTS
+    assert_segment_kept_whole(fake.bodies)
+    good = [
+        p
+        for p in planned.paths
+        if rp.first_via_m(p, CLOSE_SEGMENT.points[0]) >= 3000
+        and abs(p.track.length_m() - 10_000) <= 250
+    ]
+    assert good, [round(p.track.length_m()) for p in planned.paths]
+    # the warm-up detour comes before the segment; the distance detours after it
+    for path in good:
+        points = path.query.points
+        assert points.index(CLOSE_SEGMENT.points[0]) == 2
+    assert not any("warm-up" in n for n in planned.notes)
+
+
+def test_warmup_that_cannot_be_reached_says_so(ors) -> None:
+    service, fake = ors
+    fake.refuse_detours = True  # no path near any detour point
+    planned = rp.plan(service, warm_request(3000))
+    assert planned.requests <= rp.MAX_REQUESTS
+    assert all(rp.first_via_m(p, CLOSE_SEGMENT.points[0]) < 3000 for p in planned.paths)
+    assert "the 3 km warm-up was not reached within the request cap" in planned.notes[0]
+    assert "segment near at km 0.4" in planned.notes[0]
+    assert_segment_kept_whole(fake.bodies)
+
+
+def test_warmup_respects_the_request_cap(ors) -> None:
+    service, fake = ors
+    planned = rp.plan(service, warm_request(3000, candidates=5), max_requests=3)
+    assert len(fake.bodies) == planned.requests == 3
+    planned = rp.plan(service, warm_request(3000), max_requests=1)
+    assert "the 3 km warm-up was not reached" in planned.notes[0]
+    planned = rp.plan(
+        service, rp.PlanRequest(start=START, end=None, distance_m=8000, warmup_m=2000)
+    )
+    assert "--warmup applies to the first --via point or segment" in planned.notes[-1]
+
+
 def test_alternatives_for_start_and_end(ors) -> None:
     service, fake = ors
     end = Point(*offset(ORIGIN, 3000, 0), "end")
@@ -525,3 +615,184 @@ def test_picture_with_tiles_and_without_elevation(tmp_path: Path) -> None:
         "Route 2", bare, known=None, lang="en", name="r2", out_dir=tmp_path
     )
     assert path.is_file() and info == {"tiles": "off"}
+
+
+# The picture: familiarity on the line, earlier runs, labels -------------------------------------
+
+STREET_M = 150
+
+
+def known_from_lines(lines: list[tuple[tuple[float, float], tuple[float, float]]]) -> Known:
+    """Known ground: the 30 m cells of runs along straight lines (metres from ORIGIN)."""
+    lo, hi = offset(ORIGIN, -4500, -5000), offset(ORIGIN, 6000, 5000)
+    grid = Grid(origin=lo)
+    cells: set[tuple[int, int]] = set()
+    for (e0, n0), (e1, n1) in lines:
+        steps = int(max(abs(e1 - e0), abs(n1 - n0)) // 10) + 1
+        pts = [
+            offset(ORIGIN, e0 + (e1 - e0) * k / steps, n0 + (n1 - n0) * k / steps)
+            for k in range(steps + 1)
+        ]
+        keys = grid.cells(np.array([p[0] for p in pts]), np.array([p[1] for p in pts]))
+        cells |= {(int(x), int(y)) for x, y in keys}
+    return Known(grid, (lo[0], hi[0], lo[1], hi[1]), cells)
+
+
+# Every street of a 150 m grid, 6 by 8 km, run; or three lines.
+DENSE = known_from_lines(
+    [((x, -4000), (x, 4000)) for x in range(-3000, 3001, STREET_M)]
+    + [((-3000, y), (3000, y)) for y in range(-3900, 4000, STREET_M)]
+)
+SPARSE = known_from_lines([((0, -4000), (0, 4000)), ((-3000, 1500), (3000, 1500))])
+# Half on the grid, half east of it; a stored segment from 400 m after the start.
+PART_KNOWN = [
+    (0, 0),
+    (0, 1500),
+    (2400, 1500),
+    (4500, 1500),
+    (4500, -1050),
+    (2400, -1050),
+    (0, -1050),
+    (0, 0),
+]
+NEAR_START = SegmentDef(
+    "near",
+    "Hill near home",
+    *offset(ORIGIN, 0, 400),
+    *offset(ORIGIN, 0, 1400),
+    dist_min_m=950,
+    dist_max_m=1050,
+)
+
+
+@pytest.fixture
+def drawn(monkeypatch) -> list:
+    """The figures the pictures were drawn on (saved as usual)."""
+    from thresy.analysis import plots
+
+    figures: list = []
+    save = plots._save
+
+    def keep(fig, name, out_dir):
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        path = save(fig, name, out_dir)
+        FigureCanvasAgg(fig)  # closing detached it; extents need a renderer
+        figures.append(fig)
+        return path
+
+    monkeypatch.setattr(plots, "_save", keep)
+    return figures
+
+
+def hilly(points_m: list[tuple[float, float]]) -> Track:
+    res = resample(track(points_m), 10.0)
+    return Track(res.lat, res.lon, 120 + 60 * np.sin(res.cum / 1500))
+
+
+def legend_texts(fig) -> list[str]:
+    return [t.get_text() for legend in fig.legends for t in legend.get_texts()]
+
+
+@pytest.mark.parametrize("history", ["dense", "sparse"])
+@pytest.mark.parametrize("with_tiles", [False, True])
+def test_familiar_ground_is_on_the_line_and_never_floods_the_map(
+    tmp_path, drawn, history, with_tiles
+) -> None:
+    known = DENSE if history == "dense" else SPARSE
+    report = rr.measure(hilly(PART_KNOWN), known=known, segments=[NEAR_START])
+    assert 0.3 < report["familiar_share"] < 0.8  # part on it, part outside
+    tiles = None
+    if with_tiles:
+        tiles = rplot.TileSource(OSM_TILE_URL, tmp_path / "c", mock_client(FakeTiles()), "© x")
+    _, info = rplot.plot_route(
+        "R", report, known=known, lang="en", name="r", out_dir=tmp_path, tiles=tiles
+    )
+    fig = drawn[-1]
+    ax = fig.axes[0]
+    legend = legend_texts(fig)
+    assert {"Route, run before", "Route, new ground"} <= set(legend)
+    styles = {line.get_linestyle() for line in ax.lines if line.get_color() == "#2a78d6"}
+    assert {"-", "--"} <= styles  # solid where run before, dashed on new ground
+    if with_tiles:
+        assert info["tiles"] == "drawn"
+        assert len(ax.images) == 1  # the map only: no known-ground overlay
+        assert "Earlier runs" not in legend
+    else:
+        (layer,) = ax.images
+        alpha = np.asarray(layer.get_array())[:, :, 3]
+        assert 0 < alpha.max() <= 0.35  # faint
+        # true cell size: no more cells drawn than are known, and a grid stays a network
+        assert (alpha > 0).sum() <= len(known.cells)
+        if history == "dense":
+            assert (alpha > 0).mean() < 0.45  # 30 m lines every 150 m, not a filled area
+        assert "Earlier runs" in legend
+
+
+def test_steady_drawing_ignores_short_stretches() -> None:
+    mask = np.array([1] * 30 + [0] * 4 + [1] * 30 + [0] * 40, dtype=bool)
+    out = rplot.steady(mask, 10)
+    assert out[:64].all() and not out[64:].any()
+    assert rplot.steady(np.ones(5, dtype=bool), 10).all()
+
+
+def _boxes(ax) -> list:
+    from matplotlib.text import Annotation, Text
+
+    renderer = ax.figure.canvas.get_renderer()
+    out = []
+    for t in ax.texts:
+        if not t.get_text() or not t.get_visible():
+            continue
+        if isinstance(t, Annotation):
+            t.update_positions(renderer)
+        out.append((t.get_text(), Text.get_window_extent(t, renderer)))
+    return out
+
+
+@pytest.mark.parametrize("shape", ["loop", "point to point"])
+def test_labels_stay_inside_and_clear_of_each_other(tmp_path, drawn, shape) -> None:
+    points = PART_KNOWN if shape == "loop" else [*PART_KNOWN[:5], (3550, -1050)]
+    report = rr.measure(hilly(points), known=SPARSE, segments=[NEAR_START])
+    rplot.plot_route("R", report, known=SPARSE, lang="de", name="r", out_dir=tmp_path)
+    ax_map, ax_profile = drawn[-1].axes
+    for ax in (ax_map, ax_profile):
+        frame = ax.get_window_extent(ax.figure.canvas.get_renderer())
+        boxes = _boxes(ax)
+        for text, box in boxes:
+            assert box.x0 >= frame.x0 - 1 and box.x1 <= frame.x1 + 1, text
+            assert box.y0 >= frame.y0 - 1 and box.y1 <= frame.y1 + 1, text
+        for i, (a, box_a) in enumerate(boxes):
+            for b, box_b in boxes[i + 1 :]:
+                assert not box_a.overlaps(box_b), (a, b)
+    names = [t for t, _ in _boxes(ax_map)]
+    assert "Hill near home" in names
+    assert ("Start/Ziel" if shape == "loop" else "Ziel") in names
+    assert "Hill near home" in [t for t, _ in _boxes(ax_profile)]
+
+
+def test_a_name_without_room_goes_into_the_legend(tmp_path, drawn, monkeypatch) -> None:
+    monkeypatch.setattr(rplot._Labels, "place", lambda self, *args, **kw: None)
+    report = rr.measure(track(SQUARE, [100, 100, 180, 180, 100]), known=None, segments=[HILL])
+    rplot.plot_route("R", report, known=None, lang="en", name="r", out_dir=tmp_path)
+    legend = legend_texts(drawn[-1])
+    assert "Stored segment: Hill climb" in legend and "Start/finish" in legend
+
+
+def test_labels_avoid_what_is_blocked() -> None:
+    from thresy.analysis import plots
+
+    plt = plots._plt()
+    fig, ax = plt.subplots(figsize=(3, 3))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10)
+    labels = rplot._Labels(ax)
+    labels.block_point(5, 4, 30)  # right under the first try
+    blocked = labels.taken[0]
+    ann = labels.place("Label", [(5, 5)], rplot.AROUND)
+    assert ann is not None and not labels._extent(ann).overlaps(blocked)
+    corner = labels.place("Corner label", [(0.3, 0.3)], rplot.AROUND)
+    assert corner is not None and labels.fits(labels.taken.pop())  # inside, clear of the rest
+    labels.taken.append(labels.frame)  # no room left anywhere
+    assert labels.place("No room", [(5, 5)], rplot.AROUND) is None
+    plt.close(fig)

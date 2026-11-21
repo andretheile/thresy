@@ -16,6 +16,11 @@ Three cases:
   requests. Legs inside a stored segment (``segment:KEY``) never get a detour. A route that is
   already longer than the target cannot be made shorter and is returned as it is.
 
+With a **warm-up** (``--warmup``), before the distance detours, the leg to the first via point
+gets a detour of its own when that point comes too early (``_warm_up``, at most
+:data:`WARMUP_STEPS` requests); the distance detours then go only on legs after it. A warm-up
+that cannot be reached leaves the best route and a note.
+
 The planner returns every route it got; :func:`rank` orders them for the athlete's
 preference after the caller has measured them, and drops near-duplicates.
 """
@@ -44,6 +49,10 @@ MAX_REQUESTS = 10
 ROUND_TRIP_POINTS = 4
 DETOUR_RADIUS_M = 1000.0
 DETOUR_STEPS = 3
+WARMUP_STEPS = 3
+"""Requests at most for putting the first via point far enough into the route."""
+WARMUP_MARGIN_M = 150.0
+"""Aimed beyond the warm-up, so a route that comes out a little short still meets it."""
 MAX_ALTERNATIVE_STRAIGHT_M = 80_000.0
 PREFERENCES = ("familiar", "new", "none")
 STOPPING = ("quota", "rate_limit", "auth", "unavailable")
@@ -67,10 +76,17 @@ class PlanRequest:
     candidates: int = 3
     trails: bool = False
     avoid_steps: bool = False
+    warmup_m: float | None = None
+    """Easy running before the first via point (a segment's start): it should come no earlier
+    than this far into the route."""
 
     @property
     def loop(self) -> bool:
         return self.end is None
+
+    @property
+    def first_via(self) -> tuple[float, float] | None:
+        return self.vias[0].points[0] if self.vias else None
 
 
 @dataclass
@@ -113,8 +129,28 @@ def plan(
     if req.loop and not req.vias:
         if not req.distance_m:
             raise RouteError("a loop needs --distance KM; or give --via points or --to")
-        return _round_trips(budget, req)
-    return _through_points(budget, req)
+        planned = _round_trips(budget, req)
+    else:
+        planned = _through_points(budget, req)
+    if req.warmup_m and not req.vias:
+        planned.notes.append("--warmup applies to the first --via point or segment; there is none")
+    return planned
+
+
+def first_via_m(path: RoutedPath, point: tuple[float, float]) -> float:
+    """How far along ``path`` it reaches ``point``, a point it was asked to pass: from the
+    service's way points when it gives one per point asked, else the first approach within
+    75 m (or the nearest point)."""
+    cum = path.track.cumulative()
+    query = path.query
+    if query is not None and point in query.points and len(path.way_points) == len(query.points):
+        i = path.way_points[query.points.index(point)]
+        if 0 <= i < len(cum):
+            return float(cum[i])
+    xy = project(path.track.lat, path.track.lon, point)
+    gap = np.hypot(xy[:, 0], xy[:, 1])
+    near = np.flatnonzero(gap <= 75.0)
+    return float(cum[int(near[0]) if near.size else int(np.argmin(gap))])
 
 
 def _query(req: PlanRequest, **kw: Any) -> RouteQuery:
@@ -217,6 +253,15 @@ def _through_points(budget: _Budget, req: PlanRequest) -> Planned:
     )
     pool = list(base)
     method = "alternatives" if alternatives else "through the points"
+    first = base[0]
+    warmed = False
+    if req.warmup_m and req.vias:
+        points, radii, first, attempts, warmed = _warm_up(budget, req, points, radii, first, notes)
+        pool += attempts
+        if warmed:
+            method = "warm-up detour"
+            locked = {leg + 1 for leg in locked}
+        locked |= set(range(2 if warmed else 1))  # further detours come after the first via
     if not req.distance_m:
         if req.candidates > len(pool):
             notes.append(
@@ -227,19 +272,93 @@ def _through_points(budget: _Budget, req: PlanRequest) -> Planned:
         return Planned(pool, budget.used, method, notes, points)
     target = float(req.distance_m)
     tol = target_tolerance_m(target)
-    first = base[0]
     d0 = _length(first)
     if d0 >= target - tol:
         if d0 > target + tol:
+            what = " with the warm-up" if warmed else ""
             notes.append(
-                f"the route through these points is already {d0 / 1000:.1f} km, more than the"
-                f" {target / 1000:g} km target; a detour cannot make it shorter"
+                f"the route through these points{what} is already {d0 / 1000:.1f} km, more than"
+                f" the {target / 1000:g} km target; a detour cannot make it shorter"
             )
         return Planned(pool, budget.used, method, notes, points)
     detour_paths, detour_notes = _detours(budget, req, points, radii, locked, d0)
     pool += detour_paths
     notes += detour_notes
     return Planned(pool, budget.used, "detours", notes, points)
+
+
+def _warm_up(
+    budget: _Budget,
+    req: PlanRequest,
+    points: list[tuple[float, float]],
+    radii: tuple[float, ...],
+    base: RoutedPath,
+    notes: list[str],
+) -> tuple[list[tuple[float, float]], tuple[float, ...], RoutedPath, list[RoutedPath], bool]:
+    """Lengthen the leg before the first via point until that point comes at least
+    ``req.warmup_m`` into the route: one detour point beside the leg (outward side first),
+    aimed at the warm-up plus :data:`WARMUP_MARGIN_M` and corrected by the secant method, in
+    at most :data:`WARMUP_STEPS` requests. Returns the points and radii to go on with, the
+    route to go on from, every route got, and whether a detour point was put in."""
+    warm = float(req.warmup_m or 0)
+    via = points[1]
+    got = first_via_m(base, via)
+    if got >= warm:
+        return points, radii, base, [], False
+    want = warm + WARMUP_MARGIN_M
+    straight = _polyline_m(points[:2])
+    factor = min(max(got / straight, 1.1), 2.5) if straight > 1 else 1.3
+    origin = points[0]
+    sides = [p for p in _placements(points, set(), req.loop) if p[0] == 0][:2]
+    attempts: list[RoutedPath] = []
+    best: tuple[tuple, RoutedPath, list[tuple[float, float]], tuple[float, ...]] | None = None
+    steps = 0
+    for _, normal, length, mid in sides:
+        extra = max((want - got) / factor, 50.0)
+        history = [(0.0, got)]
+        while steps < WARMUP_STEPS and budget.left > 0:
+            steps += 1
+            spot = (mid + normal * detour_offset_m(length, extra))[None, :]
+            lat, lon = unproject(spot, origin)
+            query_points = [points[0], (float(lat[0]), float(lon[0])), *points[1:]]
+            query_radii = (radii[0], DETOUR_RADIUS_M, *radii[1:])
+            try:
+                path = budget.route(
+                    _query(req, points=tuple(query_points), radiuses_m=query_radii)
+                )[0]
+            except RoutingError as exc:
+                if exc.kind in ("no_route", "point"):
+                    break  # no path near this detour point: the other side
+                notes.append(f"stopped early: {exc}")
+                steps = WARMUP_STEPS
+                break
+            attempts.append(path)
+            d = first_via_m(path, via)
+            score = (True, -abs(d - want)) if d >= warm else (False, d)
+            if best is None or score > best[0]:
+                best = (score, path, query_points, query_radii)
+            if d >= warm:
+                break
+            history.append((extra, d))
+            (e1, g1), (e2, g2) = history[-2], history[-1]
+            slope = (g2 - g1) / (e2 - e1) if abs(e2 - e1) > 1e-6 else 0.0
+            extra = max(e2 + (want - g2) / (slope if slope >= 0.3 else factor), 50.0)
+        if (best is not None and best[0][0]) or steps >= WARMUP_STEPS:
+            break
+    label = req.vias[0].label
+    if best is None or (not best[0][0] and best[0][1] <= got):
+        notes.append(
+            f"the {warm / 1000:g} km warm-up was not reached within the request cap: the route"
+            f" reaches {label} at km {got / 1000:.1f}"
+        )
+        return points, radii, base, attempts, False
+    _, path, query_points, query_radii = best
+    if not best[0][0]:
+        notes.append(
+            f"the {warm / 1000:g} km warm-up was not reached within the request cap: the best"
+            f" route reaches {label} at km {first_via_m(path, via) / 1000:.1f}"
+        )
+    return query_points, query_radii, path, attempts, True
 
 
 def _polyline_m(points: list[tuple[float, float]]) -> float:
@@ -355,18 +474,18 @@ def _shape_rank(retraced: float) -> int:
 
 
 def rank(reports: list[dict[str, Any]], prefer: str, target_m: float | None) -> list[dict]:
-    """``reports`` ordered for the athlete: within the target tolerance first, then by the
-    preference (``familiar``: most ground run before; ``new``: least; compared in steps of
-    10 %, so a few cells more or less do not outweigh the shape), real loops before
-    out-and-back shapes, then by the distance to the target. Near-duplicates (85 % of their
-    ground shared) are dropped, keeping the better one."""
+    """``reports`` ordered for the athlete: those that meet an asked warm-up first, then within
+    the target tolerance, then by the preference (``familiar``: most ground run before;
+    ``new``: least; compared in steps of 10 %, so a few cells more or less do not outweigh the
+    shape), real loops before out-and-back shapes, then by the distance to the target.
+    Near-duplicates (85 % of their ground shared) are dropped, keeping the better one."""
 
     def key(r: dict[str, Any]) -> tuple:
         off = abs(r.get("off_target_km") or 0.0)
         ok = r.get("close_to_target", True)
         fam = r.get("familiar_share") or 0.0
         pref = {"familiar": -round(fam, 1), "new": round(fam, 1)}.get(prefer, 0.0)
-        return (not ok, pref, _shape_rank(r["retraced_share"]), off)
+        return (not r.get("warmup_met", True), not ok, pref, _shape_rank(r["retraced_share"]), off)
 
     ordered = sorted(reports, key=key)
     kept: list[dict[str, Any]] = []

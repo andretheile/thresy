@@ -53,12 +53,19 @@ def _xy(points: list[tuple[float, float]], origin: tuple[float, float]) -> np.nd
 
 
 def _densify(xy: np.ndarray, step: float = STEP_M) -> np.ndarray:
+    return _densify_marked(xy, step)[0]
+
+
+def _densify_marked(xy: np.ndarray, step: float = STEP_M) -> tuple[np.ndarray, list[int]]:
+    """Points every ``step`` metres, and the index each corner ended up at."""
     out = [xy[0]]
+    at = [0]
     for a, b in itertools.pairwise(xy):
         n = max(int(np.hypot(*(b - a)) // step), 1)
         for k in range(1, n + 1):
             out.append(a + (b - a) * k / n)
-    return np.array(out)
+        at.append(len(out) - 1)
+    return np.array(out), at
 
 
 class FakeORS:
@@ -71,6 +78,8 @@ class FakeORS:
         """Answer with ``status``/``error`` from this request number on (1-based)."""
         self.fixed_round_trip_m: float | None = None
         """Every round trip this long, whatever length is asked (it never converges)."""
+        self.refuse_detours = False
+        """No path near any detour point (a point sent with a search radius of 1000 m)."""
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -80,6 +89,9 @@ class FakeORS:
         if self.status != 200 and (self.fail_after is None or failing):
             payload = {"error": self.error} if self.error is not None else {}
             return httpx.Response(self.status, json=payload)
+        if self.refuse_detours and 1000 in (body.get("radiuses") or []):
+            error = {"code": 2010, "message": "Could not find routable point"}
+            return httpx.Response(404, json={"error": error})
         coords = [(c[1], c[0]) for c in body["coordinates"]]
         trip = (body.get("options") or {}).get("round_trip")
         if trip:
@@ -157,15 +169,16 @@ class FakeORS:
         origin = points[0]
         xy = _xy(points, origin)
         corners = [xy[0]]
+        asked = [0]  # which corners are the points asked for (the way points)
         for a, b in itertools.pairwise(xy):
             d = b - a
-            if np.hypot(*d) < STRAIGHT_BELOW_M:
-                corners.append(b)
-                continue
-            normal = np.array([-d[1], d[0]])
-            corners += [(a + b) / 2 + normal * DETOUR * side, b]
-        dense = _densify(np.array(corners))
-        return self._feature(dense, origin, [0, len(dense) - 1])
+            if np.hypot(*d) >= STRAIGHT_BELOW_M:
+                normal = np.array([-d[1], d[0]])
+                corners.append((a + b) / 2 + normal * DETOUR * side)
+            corners.append(b)
+            asked.append(len(corners) - 1)
+        dense, at = _densify_marked(np.array(corners))
+        return self._feature(dense, origin, [at[i] for i in asked])
 
 
 def mock_client(handler: Any) -> httpx.Client:

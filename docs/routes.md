@@ -26,7 +26,8 @@ help texts (`coach route plan --help`) are written for the agent and list every 
 - **Surface and way type**: the routing service's shares (paved, unpaved, unknown; asphalt,
   gravel, ...; path, track, street, road, ...). GPX files carry no surface; `show` says so.
 - **Familiar**: the share of the route on ground the athlete's recorded runs passed before.
-  Computed locally (below) and never sent anywhere.
+  Computed locally (below) and never sent anywhere. The picture draws the route solid there and
+  dashed on new ground.
 - **Retraced**: the share of the route on ground the route itself covers twice: a point counts
   when the route passes within 20 m of it again at least 100 m further on. Both passes count, so a
   pure there-and-back is 100 %, a loop 0 %, and a 10 km loop with a 2 km "stick" to and from it
@@ -87,6 +88,9 @@ How candidates are made, with at most **10 requests per call** (`--candidates` 1
   from the missing distance and corrected over up to three requests. The leg inside a stored
   segment never gets a detour. A route already longer than the target stays as it is, and the
   report says by how much it is over.
+- **`--warmup KM`** puts the first via point (a segment's start) at least KM into the route with
+  a detour before it (up to 3 of the 10 requests), adds the rest of the distance after it, and
+  says in a note when the cap did not allow it (`first_via_km` and `warmup_met` in `--json`).
 
 Candidates are ranked: within the tolerance first, then by `--prefer` (`familiar`: most ground run
 before, `new`: least, compared in steps of 10 %), loops before out-and-back shapes, then by the
@@ -179,8 +183,9 @@ Every deployment sends its own requests, so heavy use anywhere is the operator's
 cannot meet the policy, or the coach makes many pictures, set `COACH_ROUTE_TILE_URL` to another
 OSM-derived tile service (with its key in the URL if it needs one, and its credit in
 `COACH_ROUTE_TILE_ATTRIBUTION`) or to `none`. Without tiles the picture still shows the route,
-kilometre marks, direction, start and finish, the stored segments, the athlete's known ground, a
-scale bar and the elevation profile.
+kilometre marks, direction, start and finish, the stored segments, a scale bar and the elevation
+profile, with earlier runs as faint 30 m marks underneath (over tiles they are left out, so the
+map stays readable).
 
 ## Attribution
 

@@ -73,7 +73,9 @@ PLAN_HELP = _help(
     target, candidates add one detour each. The reported distance is always the distance the
     route actually has: a route through far-apart points can be longer than the target, and the
     words then say so ("2.3 km over the 10 km target"). "close to the target" means within
-    0.25 km or 2.5 %, whichever is more.""",
+    0.25 km or 2.5 %, whichever is more. --warmup KM puts the first via point (a segment's
+    start) at least KM into the route with a detour before it, the rest of the distance after
+    it; a note says when the request cap did not allow it.""",
     """--prefer familiar ranks routes on ground run before first, new the least known first,
     none (default) only by distance and shape. --candidates N (1-5) routes are shown; the
     service is asked at most 10 times per call. --trails uses openrouteservice's hiking profile,
@@ -273,15 +275,14 @@ def _picture(
 def _title(n: int | None, report: dict[str, Any]) -> str:
     from thresy.analysis import plots
     from thresy.config import get_settings
+    from thresy.tools.route_report import shape_label
 
-    lab = plots.labels(get_settings().language)
+    lang = get_settings().language
+    lab = plots.labels(lang)
     bits = [f"{report['distance_km']:.1f} km"]
     if report["ascent_m"] is not None:
         bits.append(f"↑ {report['ascent_m']} m ↓ {report['descent_m']} m")
-    if report["retraced_share"] >= 0.5:  # the shape words of route_report
-        bits.append(lab["route_there_back"])
-    else:
-        bits.append(lab["route_loop"] if report["loop"] else lab["route_one_way"])
+    bits.append(shape_label(report, lang))  # the report's shape, in the picture's language
     head = f"{lab['route']} {n}" if n is not None else lab["route"]
     return f"{head} · " + " · ".join(bits)
 
@@ -331,6 +332,15 @@ def route_plan(
         bool, typer.Option("--trails", help="Prefer paths and trails (hiking profile).")
     ] = False,
     avoid_steps: Annotated[bool, typer.Option("--avoid-steps", help="Avoid stairs.")] = False,
+    warmup: Annotated[
+        float | None,
+        typer.Option(
+            "--warmup",
+            min=0.1,
+            max=50,
+            help="Km of easy running before the first --via point or segment.",
+        ),
+    ] = None,
     plot: PlotOption = False,
     json_out: JsonOption = False,
 ) -> None:
@@ -362,6 +372,7 @@ def route_plan(
                 candidates=candidates,
                 trails=trails,
                 avoid_steps=avoid_steps,
+                warmup_m=warmup * 1000 if warmup else None,
             )
             with make_client() as client:
                 provider = make_provider(settings, client)
@@ -385,6 +396,11 @@ def route_plan(
         report["_cells"] = rp.route_cells(path.track.lat, path.track.lon, path.track.start)
         report["provider_distance_km"] = round(path.distance_m / 1000, 2)
         report["provider_ascent_m"] = None if path.ascent_m is None else round(path.ascent_m)
+        if request.warmup_m and request.first_via:
+            reached = rp.first_via_m(path, request.first_via)
+            report["warmup_km"] = round(request.warmup_m / 1000, 2)
+            report["first_via_km"] = round(reached / 1000, 2)
+            report["warmup_met"] = reached >= request.warmup_m
         reports.append(report)
     chosen = rp.rank(reports, prefer.value, request.distance_m)[:candidates]
     tag = _tag(request, prefer.value)
@@ -416,6 +432,7 @@ def route_plan(
         else {"lat": end_point.lat, "lon": end_point.lon, "how": end_point.label},
         "vias": [{"how": v.label, "points": v.points} for v in vias],
         "target_km": distance,
+        "warmup_km": warmup,
         "prefer": prefer.value,
         "provider": {
             "name": provider.name,
@@ -448,6 +465,8 @@ def _tag(request: Any, prefer: str) -> str:
         str(request.trails),
         str(request.avoid_steps),
     ]
+    if request.warmup_m:
+        parts.append(f"warmup {request.warmup_m}")
     digest = hashlib.sha256("|".join(parts).encode()).hexdigest()[:6]
     km = f"-{request.distance_m / 1000:g}k" if request.distance_m else ""
     return f"route{km}-{digest}"
@@ -488,6 +507,11 @@ def _warnings(report: dict[str, Any], request: Any, planned: Any) -> list[str]:
             )
     if request.end is not None and (g := gap((request.end.lat, request.end.lon))) > 75:
         out.append(f"ends {g:.0f} m from the requested end")
+    if report.get("warmup_met") is False:
+        out.append(
+            f"reaches {request.vias[0].label} at km {report['first_via_km']:.1f}, before the"
+            f" {report['warmup_km']:g} km warm-up"
+        )
     return out
 
 
@@ -515,6 +539,8 @@ def _plan_text(
         lines.append(f"to {end['how']} ({end['lat']:.5f}, {end['lon']:.5f})")
     for v in data["vias"]:
         lines.append(f"via {v['how']}")
+    if data["warmup_km"] and data["vias"]:
+        lines.append(f"warm-up: at least {data['warmup_km']:g} km before the first via point")
     p = data["provider"]
     lines.append(
         f"{p['name']} ({p['profile']}, {p['method']}): {p['requests']} request(s),"

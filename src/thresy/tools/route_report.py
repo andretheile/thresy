@@ -245,24 +245,27 @@ def _pct(share: float | None) -> str:
     return "-" if share is None else f"{share * 100:.0f}%"
 
 
+def shape_kind(report: dict[str, Any]) -> str:
+    """The route's shape, from where it ends and how much it retraces itself: ``loop``,
+    ``loop_parts``, ``loop_mostly_back``, ``loop_back``, or the same with ``oneway`` for a
+    route that ends away from its start. The one classification behind the report's words and
+    the picture's title."""
+    level = sum(report["retraced_share"] >= limit for limit in SHAPE_LEVELS)
+    base = "loop" if report["loop"] else "oneway"
+    return base + ("", "_parts", "_mostly_back", "_back")[level]
+
+
+def shape_label(report: dict[str, Any], lang: str = "en") -> str:
+    """The shape in words, in ``lang`` (the picture's labels; English ones are the report's)."""
+    from thresy.analysis.plots import labels
+
+    return labels(lang)[f"route_shape_{shape_kind(report)}"]
+
+
 def shape_words(report: dict[str, Any]) -> str:
-    r = report["retraced_share"]
-    level = sum(r >= limit for limit in SHAPE_LEVELS)
-    if report["loop"]:
-        words = (
-            "a loop",
-            "a loop with out-and-back parts",
-            "mostly out and back on the same way",
-            "there and back on the same way",
-        )[level]
-    else:
-        words = (
-            "point to point",
-            "point to point with out-and-back parts",
-            "point to point, mostly retracing itself",
-            "point to point, retracing itself",
-        )[level]
-    return words if level == 0 else f"{words} ({_pct(r)} retraced)"
+    words = shape_label(report)
+    plain = shape_kind(report) in ("loop", "oneway")
+    return words if plain else f"{words} ({_pct(report['retraced_share'])} retraced)"
 
 
 def distance_words(report: dict[str, Any]) -> str:
