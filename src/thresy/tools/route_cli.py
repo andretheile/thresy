@@ -230,8 +230,12 @@ def _history(conn: Any, box: tuple[float, float, float, float], exclude: int | N
     return known_cells(conn, box, exclude_activity=exclude), list_segments(conn)
 
 
-def _union_box(tracks: list[Any]) -> tuple[float, float, float, float]:
-    boxes = [t.bbox() for t in tracks]
+def _union_box(tracks: list[Any], *, plot: bool = False) -> tuple[float, float, float, float]:
+    """The box the known ground is needed for: the routes, or with ``plot`` all of their
+    pictures (so the background does not stop at the route's edge)."""
+    from thresy.tools.route_plot import map_box
+
+    boxes = [map_box(t.lat, t.lon) if plot else t.bbox() for t in tracks]
     return (
         min(b[0] for b in boxes),
         max(b[1] for b in boxes),
@@ -357,7 +361,7 @@ def route_plan(
                 provider = make_provider(settings, client)
                 planned = rp.plan(provider, request)
             tracks = [p.track for p in planned.paths]
-            known, segments = _history(conn, _union_box(tracks))
+            known, segments = _history(conn, _union_box(tracks, plot=plot))
         except errors as exc:
             raise fail(str(exc), as_json=json_out) from exc
     reports = []
@@ -580,7 +584,7 @@ def route_show(
     with _maybe_db(json_out) as conn:
         try:
             track = read_gpx(path)
-            known, segments = _history(conn, track.bbox())
+            known, segments = _history(conn, _union_box([track], plot=plot))
             report = measure(track, known=known, segments=segments, elevation_source="the file")
         except errors as exc:
             raise fail(str(exc), as_json=json_out) from exc
@@ -651,7 +655,7 @@ def route_export(
                 raise RouteError(f"activity {act.id} has no recorded positions (indoors?)")
             full = Track(df["lat"].to_numpy()[pos], df["lon"].to_numpy()[pos], alt[pos])
             track = simplify_to(full, tolerance_m=3.0, max_points=2500)
-            known, segments = _history(conn, track.bbox(), exclude=act.id)
+            known, segments = _history(conn, _union_box([track], plot=plot), exclude=act.id)
             report = measure(
                 track, known=known, segments=segments, elevation_source="the recorded altitude"
             )

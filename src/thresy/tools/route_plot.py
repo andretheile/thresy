@@ -289,6 +289,16 @@ def _extent(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float]:
     return cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
 
 
+def map_box(lat: np.ndarray, lon: np.ndarray) -> tuple[float, float, float, float]:
+    """``(lat_min, lat_max, lon_min, lon_max)`` the picture of a route shows, so the known
+    ground can be fetched for all of it."""
+    x, y = mercator(lat, lon)
+    x0, x1, y0, y1 = _extent(x, y)
+    lat_lo, lon_lo = inverse_mercator(np.array([x0]), np.array([y0]))
+    lat_hi, lon_hi = inverse_mercator(np.array([x1]), np.array([y1]))
+    return float(lat_lo[0]), float(lat_hi[0]), float(lon_lo[0]), float(lon_hi[0])
+
+
 def _mark_step_km(total_km: float) -> int:
     return 1 if total_km <= 16 else 2 if total_km <= 40 else 5
 
@@ -491,6 +501,25 @@ def _marks(
             },
         )
     loop = report["loop"]
+    y_lo, y_hi = ax.get_ylim()
+
+    def label(text: str, px: float, py: float) -> None:
+        """Below the marker, or above it near the bottom edge (where the credits sit)."""
+        low = (py - y_lo) / (y_hi - y_lo) < 0.15
+        ax.annotate(
+            text,
+            (px, py),
+            xytext=(0, 20 if low else -20),
+            textcoords="offset points",
+            ha="center",
+            va="bottom" if low else "top",
+            fontsize=FONT["label"],
+            fontweight="bold",
+            color=plots.INK,
+            zorder=9,
+            bbox=_box(),
+        )
+
     ax.plot(
         x[0],
         y[0],
@@ -501,19 +530,7 @@ def _marks(
         markeredgewidth=2.2,
         zorder=9,
     )
-    ax.annotate(
-        lab["route_start_finish"] if loop else lab["route_start"],
-        (x[0], y[0]),
-        xytext=(0, -20),
-        textcoords="offset points",
-        ha="center",
-        va="top",
-        fontsize=FONT["label"],
-        fontweight="bold",
-        color=plots.INK,
-        zorder=9,
-        bbox=_box(),
-    )
+    label(lab["route_start_finish"] if loop else lab["route_start"], x[0], y[0])
     if not loop:
         ax.plot(
             x[-1],
@@ -525,19 +542,7 @@ def _marks(
             markeredgewidth=2.4,
             zorder=9,
         )
-        ax.annotate(
-            lab["route_finish"],
-            (x[-1], y[-1]),
-            xytext=(0, -20),
-            textcoords="offset points",
-            ha="center",
-            va="top",
-            fontsize=FONT["label"],
-            fontweight="bold",
-            color=plots.INK,
-            zorder=9,
-            bbox=_box(),
-        )
+        label(lab["route_finish"], x[-1], y[-1])
 
 
 def _legend(
@@ -603,12 +608,13 @@ def _known_layer(ax: Any, known: Any, extent: tuple[float, float, float, float])
 def _scale_bar(ax: Any, extent: tuple[float, float, float, float], lat: float) -> None:
     from thresy.analysis import plots
 
+    """A scale bar in the top right corner (the legend is top left, credits bottom right)."""
     scale = 1 / math.cos(math.radians(lat))  # mercator metres per ground metre
     width_m = (extent[1] - extent[0]) / scale
     length = _nice_length(width_m / 5)
-    x0 = extent[0] + 0.03 * (extent[1] - extent[0])
-    y0 = extent[2] + 0.03 * (extent[3] - extent[2])
-    x1 = x0 + length * scale
+    x1 = extent[1] - 0.03 * (extent[1] - extent[0])
+    y0 = extent[3] - 0.05 * (extent[3] - extent[2])
+    x0 = x1 - length * scale
     ax.plot([x0, x1], [y0, y0], color=plots.INK, linewidth=3, solid_capstyle="butt", zorder=10)
     text = f"{length / 1000:g} km" if length >= 1000 else f"{length:.0f} m"
     ax.annotate(

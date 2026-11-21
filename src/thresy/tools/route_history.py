@@ -34,6 +34,7 @@ CELL_M = 30.0
 BOX_MARGIN_M = 150.0
 """Margin around a route's bounding box for the known-ground query."""
 QUERY_TIMEOUT_S = 30
+WORK_MEM = "32MB"
 USUAL_MONTHS = 12
 START_CELL_M = 150.0
 START_RADIUS_M = 300.0
@@ -143,6 +144,10 @@ def _query(conn: Any, sql: str, params: Any) -> list[Any]:
     try:
         with conn.transaction():
             conn.execute(f"SET LOCAL statement_timeout = '{int(QUERY_TIMEOUT_S)}s'")
+            # Measured on 2.9 M samples: the de-duplication spilled to disk at the default
+            # 4 MB, and JIT compilation cost more than it saved.
+            conn.execute(f"SET LOCAL work_mem = '{WORK_MEM}'")
+            conn.execute("SET LOCAL jit = off")
             return conn.execute(sql, params).fetchall()
     except psycopg.errors.QueryCanceled as exc:
         raise RouteError(
