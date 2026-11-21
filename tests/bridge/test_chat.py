@@ -419,6 +419,25 @@ def test_agent_gets_the_home_location_from_the_bridge(make_harness) -> None:
     asyncio.run(scenario())
 
 
+def test_agent_gets_the_routing_settings_that_are_set(make_harness, monkeypatch) -> None:
+    monkeypatch.setenv("COACH_ROUTE_API_KEY", "route-key-not-real-0123")
+    monkeypatch.setenv("COACH_ROUTE_URL", "http://ors.internal:8082/ors")
+    monkeypatch.setenv("COACH_ROUTE_TILE_URL", "")  # empty counts as unset
+
+    async def scenario() -> None:
+        async with make_harness(FakeRunner(reply="ok")) as h:
+            await h.say("a route for Sunday?")
+            await h.settle()
+            env = dict(h.runner.requests[0].env)
+            routes = {k: v for k, v in env.items() if k.startswith("COACH_ROUTE_")}
+            assert routes == {
+                "COACH_ROUTE_API_KEY": "route-key-not-real-0123",
+                "COACH_ROUTE_URL": "http://ors.internal:8082/ors",
+            }
+
+    asyncio.run(scenario())
+
+
 def test_choice_answer_comes_back_as_a_message_once(make_harness) -> None:
     async def scenario() -> None:
         async with make_harness(answering()) as h:
