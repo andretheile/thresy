@@ -1,10 +1,16 @@
 """The picture of a route: a map on top, the elevation profile below, sized for a phone.
 
-The map is drawn in Web Mercator. On it: the athlete's known ground (the grid cells of
-``thresy.tools.route_history``) as faint squares, the route with a kilometre mark at every
-kilometre (every 2 or 5 km on long routes) and arrows for the direction, start and finish,
-stored segments highlighted and named, a scale bar and the credit lines. The profile shows the
-same segments as shaded spans. Without elevation the profile panel says so instead of guessing.
+The map is drawn in Web Mercator. On it: the route, solid where it runs on ground the athlete's
+recorded runs passed before (the familiar share of the report) and dashed on new ground, with a
+kilometre mark at every kilometre (every 2 or 5 km on long routes) and arrows for the
+direction, start and finish, stored segments highlighted and named, a scale bar and the credit
+lines. Without map tiles, earlier runs show faintly underneath at their true cell size (the
+grid cells of ``thresy.tools.route_history``), so even a dense history reads as a network of
+paths; over tiles they are left out, because they would hide the map. Labels are placed where
+they stay inside the map and clear of the kilometre marks, the markers and each other; a
+segment name without room goes into the legend, which sits between map and profile. The
+profile shows the same segments as shaded spans. Without elevation the profile panel says so
+instead of guessing.
 
 **Map tiles** (optional, ``COACH_ROUTE_TILE_URL``; ``none`` switches them off) come from the
 standard OpenStreetMap tile server by default, within its usage policy
@@ -271,9 +277,17 @@ def mosaic(
 
 FIG_W_IN = 6.4
 """Figure width: a phone shows the picture about 6 cm wide, so the text is set large."""
-TITLE_IN, GAP_IN, PROFILE_IN, BOTTOM_IN = 0.55, 0.42, 1.75, 0.55
+TITLE_IN, LEGEND_IN, PROFILE_IN, BOTTOM_IN = 0.55, 0.72, 1.75, 0.55
 PROFILE_LEFT_IN, PROFILE_RIGHT_IN = 0.85, 0.12
-FONT = {"label": 10.0, "mark": 8.5, "small": 8.0, "credit": 7.0}
+FONT = {"label": 10.0, "mark": 8.5, "small": 8.0, "legend": 8.5, "credit": 7.0}
+STEADY_M = 100.0
+"""Stretches of the route shorter than this are drawn like their surroundings (familiar or
+new), so crossing a street run before does not chop the line; the reported share is exact."""
+KNOWN_COLOR_ALPHA = 0.32
+NEW_DASHES = (0, (1.6, 1.1))
+"""Dash pattern of the route on new ground, in multiples of the line width."""
+KM_MARK_PT = 15.0
+START_MARK_PT = 14.0
 
 
 def _extent(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float]:
@@ -310,8 +324,101 @@ def _nice_length(metres: float) -> float:
     return 50000.0
 
 
-def _box(fc: str = "white", ec: str = "none", alpha: float = 0.88) -> dict[str, Any]:
+def _box(fc: str = "white", ec: str = "none", alpha: float = 0.9) -> dict[str, Any]:
     return {"boxstyle": "round,pad=0.25", "fc": fc, "ec": ec, "alpha": alpha}
+
+
+def steady(mask: np.ndarray, min_points: int) -> np.ndarray:
+    """``mask`` with runs shorter than ``min_points`` turned into their neighbours' value."""
+    out = mask.copy()
+    n = len(out)
+    if n == 0 or min_points <= 1:
+        return out
+    edges = np.flatnonzero(np.diff(out.astype(np.int8))) + 1
+    starts = np.r_[0, edges]
+    ends = np.r_[edges, n]
+    if len(starts) == 1:
+        return out
+    for a, b in zip(starts, ends, strict=True):
+        if b - a < min_points:
+            out[a:b] = not mask[a]
+    return out
+
+
+class _Labels:
+    """Places text labels in display space so they stay inside the axes and clear of what is
+    already there (km marks, markers, the scale bar, the credits, other labels)."""
+
+    PAD_PX = 3.0
+
+    def __init__(self, ax: Any) -> None:
+        self.ax = ax
+        self.renderer = ax.figure.canvas.get_renderer()
+        self.frame = ax.get_window_extent(self.renderer)
+        self.taken: list[Any] = []
+
+    def block_point(self, x: float, y: float, size_pt: float) -> None:
+        from matplotlib.transforms import Bbox
+
+        cx, cy = self.ax.transData.transform((x, y))
+        r = size_pt / 2 * self.ax.figure.dpi / 72 + 1
+        self.taken.append(Bbox.from_extents(cx - r, cy - r, cx + r, cy + r))
+
+    def block_artist(self, artist: Any) -> None:
+        self.taken.append(artist.get_window_extent(self.renderer))
+
+    def _extent(self, ann: Any) -> Any:
+        from matplotlib.text import Text
+
+        ann.update_positions(self.renderer)
+        return Text.get_window_extent(ann, self.renderer).padded(self.PAD_PX)
+
+    def fits(self, box: Any) -> bool:
+        f = self.frame
+        inside = box.x0 >= f.x0 and box.x1 <= f.x1 and box.y0 >= f.y0 and box.y1 <= f.y1
+        return inside and not any(box.overlaps(t) for t in self.taken)
+
+    def place(
+        self,
+        text: str,
+        anchors: list[tuple[float, float]],
+        tries: list[tuple[float, float, str, str]],
+        **kw: Any,
+    ) -> Any:
+        """The first anchor and offset at which ``text`` fits, or ``None``."""
+        for xy in anchors:
+            for dx, dy, ha, va in tries:
+                ann = self.ax.annotate(
+                    text, xy, xytext=(dx, dy), textcoords="offset points", ha=ha, va=va, **kw
+                )
+                box = self._extent(ann)
+                if self.fits(box):
+                    self.taken.append(box)
+                    return ann
+                ann.remove()
+        return None
+
+
+AROUND = [
+    (0, -18, "center", "top"),
+    (0, 18, "center", "bottom"),
+    (16, 0, "left", "center"),
+    (-16, 0, "right", "center"),
+    (14, -14, "left", "top"),
+    (-14, -14, "right", "top"),
+    (14, 14, "left", "bottom"),
+    (-14, 14, "right", "bottom"),
+]
+DIAGONAL = [
+    (14, 14, "left", "bottom"),
+    (-14, 14, "right", "bottom"),
+    (14, -14, "left", "top"),
+    (-14, -14, "right", "top"),
+    (0, 22, "center", "bottom"),
+    (0, -22, "center", "top"),
+    (22, 0, "left", "center"),
+    (-22, 0, "right", "center"),
+]
 
 
 def plot_route(
@@ -336,16 +443,10 @@ def plot_route(
     aspect = (extent[3] - extent[2]) / (extent[1] - extent[0])
     map_w = FIG_W_IN - 0.1
     map_h = map_w * aspect
-    height = TITLE_IN + map_h + GAP_IN + PROFILE_IN + BOTTOM_IN
+    height = TITLE_IN + map_h + LEGEND_IN + PROFILE_IN + BOTTOM_IN
     fig = plt.figure(figsize=(FIG_W_IN, height))
-    ax = fig.add_axes(
-        (
-            0.05 / FIG_W_IN,
-            (BOTTOM_IN + PROFILE_IN + GAP_IN) / height,
-            map_w / FIG_W_IN,
-            map_h / height,
-        )
-    )
+    map_bottom = BOTTOM_IN + PROFILE_IN + LEGEND_IN
+    ax = fig.add_axes((0.05 / FIG_W_IN, map_bottom / height, map_w / FIG_W_IN, map_h / height))
     ax_p = fig.add_axes(
         (
             PROFILE_LEFT_IN / FIG_W_IN,
@@ -355,8 +456,6 @@ def plot_route(
         )
     )
     info: dict[str, Any] = {"tiles": "off"}
-
-    # background: tiles, then known ground
     if tiles is not None:
         picture = mosaic(tiles, extent)
         info = {
@@ -370,7 +469,10 @@ def plot_route(
         if picture is not None:
             image, box = picture
             ax.imshow(image, extent=box, origin="upper", interpolation="bilinear", zorder=0)
-    has_known = known is not None and bool(known.cells) and _known_layer(ax, known, extent)
+    # Known ground as background only without a map: over tiles it would hide the map, and the
+    # route line itself shows which stretches were run before.
+    background = info["tiles"] != "drawn" and known is not None and bool(known.cells)
+    background = background and _known_layer(ax, known, extent)
     ax.set_xlim(extent[0], extent[1])
     ax.set_ylim(extent[2], extent[3])
     ax.set_aspect("equal", adjustable="box")
@@ -381,14 +483,23 @@ def plot_route(
         spine.set_visible(True)
         spine.set_color(plots.AXIS)
 
-    _route_layer(ax, x, y, report, plots)
-    _marks(ax, x, y, report, lab, plots)
-    _scale_bar(ax, extent, float(np.mean(res.lat)))
+    familiar = report.get("_familiar")
+    split = familiar is not None and len(familiar) == len(x)
+    _route_layer(ax, x, y, report, familiar if split else None, plots)
+    marks = _marks(ax, x, y, report, plots)
+    labels = _Labels(ax)
+    for mx, my in marks:
+        labels.block_point(mx, my, KM_MARK_PT)
+    labels.block_point(x[0], y[0], START_MARK_PT)
+    if not report["loop"]:
+        labels.block_point(x[-1], y[-1], START_MARK_PT)
+    for artist in _scale_bar(ax, extent, float(np.mean(res.lat))):
+        labels.block_artist(artist)
     lines = list(credits or [])
     if info.get("tiles") == "drawn" and tiles is not None:
         lines.insert(0, f"{lab['route_map']}: {tiles.attribution}")
     if lines:
-        ax.text(
+        credit = ax.text(
             0.995,
             0.006,
             "\n".join(lines),
@@ -400,16 +511,62 @@ def plot_route(
             zorder=10,
             bbox={"boxstyle": "square,pad=0.3", "fc": "white", "ec": "none", "alpha": 0.85},
         )
-    _legend(ax, report, has_known, lab, plots)
+        labels.block_artist(credit)
+    unlabelled = _endpoint_labels(labels, x, y, report["loop"], lab, plots)
+    unnamed = _segment_labels(labels, x, y, report, plots)
+    _legend(
+        fig,
+        report,
+        split,
+        background,
+        unlabelled,
+        unnamed,
+        lab,
+        plots,
+        top=(BOTTOM_IN + PROFILE_IN + LEGEND_IN - 0.08) / height,
+    )
     _profile(ax_p, report, lab, plots)
     plots._title(fig, title)
     return plots._save(fig, name, out_dir), info
 
 
-def _route_layer(ax: Any, x: np.ndarray, y: np.ndarray, report: dict[str, Any], plots: Any) -> None:
-    """The route (blue, white casing) and its stored segments (orange, named)."""
+def _route_layer(
+    ax: Any,
+    x: np.ndarray,
+    y: np.ndarray,
+    report: dict[str, Any],
+    familiar: np.ndarray | None,
+    plots: Any,
+) -> None:
+    """The route (blue, white casing): solid where it runs on ground run before, dashed on new
+    ground; stored segments in orange on top."""
     ax.plot(x, y, color="white", linewidth=6.5, solid_capstyle="round", zorder=3)
-    ax.plot(x, y, color=plots.SERIES[0], linewidth=3.4, solid_capstyle="round", zorder=4)
+    if familiar is None:
+        ax.plot(x, y, color=plots.SERIES[0], linewidth=3.4, solid_capstyle="round", zorder=4)
+    else:
+        mask = steady(np.asarray(familiar, dtype=bool), round(STEADY_M / _step(report)))
+        edges = np.flatnonzero(np.diff(mask.astype(np.int8))) + 1
+        for a, b in zip(np.r_[0, edges], np.r_[edges, len(x)], strict=True):
+            stop = min(b + 1, len(x))  # join the next stretch
+            if mask[a]:
+                ax.plot(
+                    x[a:stop],
+                    y[a:stop],
+                    color=plots.SERIES[0],
+                    linewidth=3.4,
+                    solid_capstyle="round",
+                    zorder=4,
+                )
+            else:
+                ax.plot(
+                    x[a:stop],
+                    y[a:stop],
+                    color=plots.SERIES[0],
+                    linewidth=3.4,
+                    linestyle=NEW_DASHES,
+                    dash_capstyle="butt",
+                    zorder=4,
+                )
     cum_km = report["_res"].cum / 1000
     for p in report["segments"]:
         sel = (cum_km >= p["from_km"]) & (cum_km <= p["to_km"])
@@ -419,25 +576,17 @@ def _route_layer(ax: Any, x: np.ndarray, y: np.ndarray, report: dict[str, Any], 
         ax.plot(
             x[sel], y[sel], color=plots.SERIES[1], linewidth=5.0, solid_capstyle="round", zorder=6
         )
-        mid = np.flatnonzero(sel)[sel.sum() // 2]
-        ax.annotate(
-            p["name"],
-            (x[mid], y[mid]),
-            xytext=(12, 12),
-            textcoords="offset points",
-            fontsize=FONT["label"],
-            fontweight="bold",
-            color=plots.INK,
-            zorder=9,
-            bbox=_box(ec=plots.SERIES[1], alpha=0.95),
-            arrowprops={"arrowstyle": "-", "color": plots.SERIES[1], "lw": 1.2},
-        )
+
+
+def _step(report: dict[str, Any]) -> float:
+    cum = report["_res"].cum
+    return float(cum[1] - cum[0]) if len(cum) > 1 and cum[1] > cum[0] else 10.0
 
 
 def _marks(
-    ax: Any, x: np.ndarray, y: np.ndarray, report: dict[str, Any], lab: dict[str, str], plots: Any
-) -> None:
-    """Kilometre marks, direction arrows, start and finish.
+    ax: Any, x: np.ndarray, y: np.ndarray, report: dict[str, Any], plots: Any
+) -> list[tuple[float, float]]:
+    """Kilometre marks and direction arrows; returns the marks' positions.
 
     Arrows sit a little to the right of the direction of travel, so the two directions of an
     out-and-back part stay apart; a kilometre mark that would cover an earlier one moves to the
@@ -466,7 +615,7 @@ def _marks(
         ax.plot(
             *spot,
             "o",
-            markersize=15,
+            markersize=KM_MARK_PT,
             color="white",
             markeredgecolor=plots.INK_2,
             markeredgewidth=1.2,
@@ -500,75 +649,147 @@ def _marks(
                 "mutation_scale": 16,
             },
         )
-    loop = report["loop"]
-    y_lo, y_hi = ax.get_ylim()
-
-    def label(text: str, px: float, py: float) -> None:
-        """Below the marker, or above it near the bottom edge (where the credits sit)."""
-        low = (py - y_lo) / (y_hi - y_lo) < 0.15
-        ax.annotate(
-            text,
-            (px, py),
-            xytext=(0, 20 if low else -20),
-            textcoords="offset points",
-            ha="center",
-            va="bottom" if low else "top",
-            fontsize=FONT["label"],
-            fontweight="bold",
-            color=plots.INK,
-            zorder=9,
-            bbox=_box(),
-        )
-
     ax.plot(
         x[0],
         y[0],
         "o",
-        markersize=14,
+        markersize=START_MARK_PT,
         color=plots.INK,
         markeredgecolor="white",
         markeredgewidth=2.2,
         zorder=9,
     )
-    label(lab["route_start_finish"] if loop else lab["route_start"], x[0], y[0])
-    if not loop:
+    if not report["loop"]:
         ax.plot(
             x[-1],
             y[-1],
             "s",
-            markersize=13,
+            markersize=START_MARK_PT - 1,
             color="white",
             markeredgecolor=plots.INK,
             markeredgewidth=2.4,
             zorder=9,
         )
-        label(lab["route_finish"], x[-1], y[-1])
+    return [(float(p[0]), float(p[1])) for p in drawn]
+
+
+def _endpoint_labels(
+    labels: _Labels, x: np.ndarray, y: np.ndarray, loop: bool, lab: dict[str, str], plots: Any
+) -> list[str]:
+    """Start and finish named next to their markers; returns the names that found no room."""
+    style = {
+        "fontsize": FONT["label"],
+        "fontweight": "bold",
+        "color": plots.INK,
+        "zorder": 9,
+        "bbox": _box(),
+    }
+    missing = []
+    first = lab["route_start_finish"] if loop else lab["route_start"]
+    if labels.place(first, [(x[0], y[0])], AROUND, **style) is None:
+        missing.append("start")
+    if not loop and labels.place(lab["route_finish"], [(x[-1], y[-1])], AROUND, **style) is None:
+        missing.append("finish")
+    return missing
+
+
+def _segment_labels(
+    labels: _Labels, x: np.ndarray, y: np.ndarray, report: dict[str, Any], plots: Any
+) -> list[str]:
+    """Stored segments named beside them; returns the names that found no room (they go into
+    the legend)."""
+    cum_km = report["_res"].cum / 1000
+    unnamed: list[str] = []
+    done: set[str] = set()
+    for p in report["segments"]:
+        if p["name"] in done:  # passed twice: one name is enough
+            continue
+        idx = np.flatnonzero((cum_km >= p["from_km"]) & (cum_km <= p["to_km"]))
+        if idx.size < 2:
+            continue
+        anchors = [
+            (x[i], y[i])
+            for i in idx[[round(f * (idx.size - 1)) for f in (0.5, 0.3, 0.7, 0.15, 0.85)]]
+        ]
+        ann = labels.place(
+            p["name"],
+            anchors,
+            DIAGONAL,
+            fontsize=FONT["label"],
+            fontweight="bold",
+            color=plots.INK,
+            zorder=9,
+            bbox=_box(ec=plots.SERIES[1], alpha=0.95),
+            arrowprops={"arrowstyle": "-", "color": plots.SERIES[1], "lw": 1.2},
+        )
+        done.add(p["name"])
+        if ann is None:
+            unnamed.append(p["name"])
+    return unnamed
 
 
 def _legend(
-    ax: Any, report: dict[str, Any], has_known: bool, lab: dict[str, str], plots: Any
+    fig: Any,
+    report: dict[str, Any],
+    split: bool,
+    background: bool,
+    unlabelled: list[str],
+    unnamed: list[str],
+    lab: dict[str, str],
+    plots: Any,
+    *,
+    top: float,
 ) -> None:
+    """The legend between map and profile, so it never covers the map."""
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
-    handles = [Line2D([0], [0], color=plots.SERIES[0], lw=3.4, label=lab["route_route"])]
+    blue = plots.SERIES[0]
+    if split:
+        handles = [
+            Line2D([0], [0], color=blue, lw=3.4, label=lab["route_familiar"]),
+            Line2D([0], [0], color=blue, lw=3.4, linestyle=NEW_DASHES, label=lab["route_new"]),
+        ]
+    else:
+        handles = [Line2D([0], [0], color=blue, lw=3.4, label=lab["route_route"])]
     if report["segments"]:
-        handles.append(Line2D([0], [0], color=plots.SERIES[1], lw=5, label=lab["route_segment"]))
-    if has_known:
-        handles.append(Patch(color=plots.SERIES[2], alpha=KNOWN_ALPHA, label=lab["route_known"]))
-    if len(handles) >= 2:
-        legend = ax.legend(handles=handles, loc="upper left", frameon=True, fontsize=FONT["small"])
-        legend.get_frame().set_alpha(0.9)
-        legend.get_frame().set_edgecolor("none")
-        legend.set_zorder(11)
-
-
-KNOWN_ALPHA = 0.5
+        text = lab["route_segment"] + (": " + ", ".join(unnamed) if unnamed else "")
+        handles.append(Line2D([0], [0], color=plots.SERIES[1], lw=5, label=text))
+    if background:
+        handles.append(Patch(color=plots.MUTED, alpha=KNOWN_COLOR_ALPHA, label=lab["route_known"]))
+    if "start" in unlabelled:
+        name = lab["route_start_finish"] if report["loop"] else lab["route_start"]
+        handles.append(
+            Line2D([0], [0], marker="o", color=plots.INK, lw=0, markersize=9, label=name)
+        )
+    if "finish" in unlabelled:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="white",
+                markeredgecolor=plots.INK,
+                lw=0,
+                markersize=8,
+                label=lab["route_finish"],
+            )
+        )
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, top),
+        ncol=2,
+        frameon=False,
+        fontsize=FONT["legend"],
+        handlelength=2.6,
+        columnspacing=1.6,
+    )
 
 
 def _known_layer(ax: Any, known: Any, extent: tuple[float, float, float, float]) -> bool:
-    """Known ground as faint squares under the route: the known cells widened by one cell, the
-    same tolerance as the familiar share, so familiar parts of the route get a visible band."""
+    """Earlier runs as faint marks at their true cell size (no widening), under the route: even
+    a dense history then reads as a network of paths, never as a filled area."""
     from thresy.analysis import plots
 
     lat_lo, lon_lo = inverse_mercator(np.array([extent[0]]), np.array([extent[2]]))
@@ -576,8 +797,8 @@ def _known_layer(ax: Any, known: Any, extent: tuple[float, float, float, float])
     g = known.grid
     lo = g.cells(lat_lo, lon_lo)[0]
     hi = g.cells(lat_hi, lon_hi)[0]
-    cx0, cy0 = int(lo[0]) - 2, int(lo[1]) - 2
-    cx1, cy1 = int(hi[0]) + 2, int(hi[1]) + 2
+    cx0, cy0 = int(lo[0]) - 1, int(lo[1]) - 1
+    cx1, cy1 = int(hi[0]) + 1, int(hi[1]) + 1
     w, h = cx1 - cx0 + 1, cy1 - cy0 + 1
     if w <= 0 or h <= 0 or w * h > 4_000_000:
         return False
@@ -587,15 +808,9 @@ def _known_layer(ax: Any, known: Any, extent: tuple[float, float, float, float])
             raster[cy - cy0, cx - cx0] = True
     if not raster.any():
         return False
-    wide = raster.copy()
-    wide[1:, :] |= raster[:-1, :]
-    wide[:-1, :] |= raster[1:, :]
-    grown = wide.copy()
-    grown[:, 1:] |= wide[:, :-1]
-    grown[:, :-1] |= wide[:, 1:]
     rgba = np.zeros((h, w, 4))
-    color = tuple(int(plots.SERIES[2][i : i + 2], 16) / 255 for i in (1, 3, 5))
-    rgba[grown] = (*color, KNOWN_ALPHA)
+    color = tuple(int(plots.MUTED[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    rgba[raster] = (*color, KNOWN_COLOR_ALPHA)
     lat_e = g.origin[0] + np.array([cy0, cy1 + 1]) / g.ky
     lon_e = g.origin[1] + np.array([cx0, cx1 + 1]) / g.kx
     mx, my = mercator(lat_e, lon_e)
@@ -605,19 +820,22 @@ def _known_layer(ax: Any, known: Any, extent: tuple[float, float, float, float])
     return True
 
 
-def _scale_bar(ax: Any, extent: tuple[float, float, float, float], lat: float) -> None:
+def _scale_bar(ax: Any, extent: tuple[float, float, float, float], lat: float) -> list[Any]:
+    """A scale bar in the top right corner; returns the bar and its label (to keep other labels
+    off them)."""
     from thresy.analysis import plots
 
-    """A scale bar in the top right corner (the legend is top left, credits bottom right)."""
     scale = 1 / math.cos(math.radians(lat))  # mercator metres per ground metre
     width_m = (extent[1] - extent[0]) / scale
     length = _nice_length(width_m / 5)
     x1 = extent[1] - 0.03 * (extent[1] - extent[0])
     y0 = extent[3] - 0.05 * (extent[3] - extent[2])
     x0 = x1 - length * scale
-    ax.plot([x0, x1], [y0, y0], color=plots.INK, linewidth=3, solid_capstyle="butt", zorder=10)
+    (bar,) = ax.plot(
+        [x0, x1], [y0, y0], color=plots.INK, linewidth=3, solid_capstyle="butt", zorder=10
+    )
     text = f"{length / 1000:g} km" if length >= 1000 else f"{length:.0f} m"
-    ax.annotate(
+    label = ax.annotate(
         text,
         ((x0 + x1) / 2, y0),
         xytext=(0, 4),
@@ -629,9 +847,12 @@ def _scale_bar(ax: Any, extent: tuple[float, float, float, float], lat: float) -
         zorder=10,
         bbox={"boxstyle": "square,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.8},
     )
+    return [bar, label]
 
 
 def _profile(ax: Any, report: dict[str, Any], lab: dict[str, str], plots: Any) -> None:
+    from matplotlib.text import Text
+
     from thresy.tools.route_report import smoothed_elevation
 
     res = report["_res"]
@@ -660,18 +881,37 @@ def _profile(ax: Any, report: dict[str, Any], lab: dict[str, str], plots: Any) -
         ax.plot(km, ele, color=plots.SERIES[0], linewidth=2.0)
         ax.set_ylim(floor, top)
         ax.set_ylabel(lab["altitude"], fontsize=FONT["label"])
+    # Segment names at the top, moved sideways to stay inside the axes and down a row when they
+    # would cover each other.
+    renderer = ax.figure.canvas.get_renderer()
+    frame = ax.get_window_extent(renderer)
+    per_px = 72 / ax.figure.dpi
+    placed: list[Any] = []
     for p in report["segments"]:
         ax.axvspan(p["from_km"], p["to_km"], color=plots.SERIES[1], alpha=0.2, linewidth=0)
-        ax.annotate(
-            p["name"],
-            ((p["from_km"] + p["to_km"]) / 2, 1.0),
-            xycoords=("data", "axes fraction"),
-            xytext=(0, -4),
-            textcoords="offset points",
-            ha="center",
-            va="top",
-            fontsize=FONT["small"],
-            fontweight="bold",
-            color=plots.INK,
-            clip_on=True,
-        )
+        centre = ((p["from_km"] + p["to_km"]) / 2, 1.0)
+        for row in range(4):
+            dy = -4 - row * 13
+            ann = ax.annotate(
+                p["name"],
+                centre,
+                xycoords=("data", "axes fraction"),
+                xytext=(0, dy),
+                textcoords="offset points",
+                ha="center",
+                va="top",
+                fontsize=FONT["small"],
+                fontweight="bold",
+                color=plots.INK,
+            )
+            ann.update_positions(renderer)
+            box = Text.get_window_extent(ann, renderer)
+            shift = max(frame.x0 + 2 - box.x0, 0) - max(box.x1 - (frame.x1 - 2), 0)
+            if shift:
+                ann.xyann = (shift * per_px, dy)
+                ann.update_positions(renderer)
+                box = Text.get_window_extent(ann, renderer)
+            if not any(box.padded(2).overlaps(b) for b in placed) or row == 3:
+                placed.append(box)
+                break
+            ann.remove()
