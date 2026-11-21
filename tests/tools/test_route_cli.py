@@ -265,6 +265,26 @@ def test_plan_from_a_place_name_and_to_a_point(
     assert data["candidates"][0]["summary"].startswith("point to point, ")
 
 
+def test_plan_from_where_an_activity_started_or_ended(conn, history, workspace, env, ors) -> None:
+    # activity:last is the newest run (201, from EAST northwards), not the newer-dated ride
+    data = json.loads(
+        run(
+            ["plan", "--start", "activity:last", "--distance", "5", "--candidates", "1", "--json"],
+            env,
+        ).output
+    )
+    assert "start of activity 201 (last run)" in data["start"]["how"]
+    assert ors.bodies[0]["coordinates"][0] == [round(EAST[1], 6), round(EAST[0], 6)]
+    ors.bodies.clear()
+    data = json.loads(
+        run(["plan", "--to", "activity:201", "--candidates", "1", "--json"], env).output
+    )
+    assert data["end"]["how"] == "end of activity 201 (id)"
+    lon, lat = ors.bodies[0]["coordinates"][-1]
+    assert lon == round(EAST[1], 6)
+    assert abs(lat - EAST[0]) * 111320 == pytest.approx(2700, abs=10)  # 900 s at 3 m/s north
+
+
 def test_plan_with_pictures_and_tiles_from_the_cache(
     conn, history, workspace, env, ors, tiles
 ) -> None:

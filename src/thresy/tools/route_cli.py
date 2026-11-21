@@ -135,7 +135,8 @@ def _activity_ref(conn: Any, ref: str, *, end: bool) -> Any:
     from thresy.tools.route import Point
     from thresy.tools.route_history import activity_point
 
-    sel = resolve_activity(_need(conn, "activity:ID"), ref, runs_only=False)
+    # last and a date mean runs; an explicit id may be any activity with positions
+    sel = resolve_activity(_need(conn, "activity:ID"), ref, runs_only=True)
     lat, lon = activity_point(conn, sel.activity.id, last=end)
     where = "end" if end else "start"
     return Point(lat, lon, f"{where} of activity {sel.activity.id} ({sel.how})")
