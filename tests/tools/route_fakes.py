@@ -7,7 +7,8 @@ synthetic geometry built from the request:
   length is the requested length times a factor that depends on the seed
   (:func:`round_trip_factor`), so the planner has to correct it;
 * a route through points goes from each point to the next over a corner placed beside the
-  straight line (``DETOUR``), which makes every leg about 1.2 times its straight length.
+  straight line (``DETOUR``), which makes a leg about 1.2 times its straight length; legs
+  shorter than ``STRAIGHT_BELOW_M`` (a stored segment, say) go straight.
 
 Elevation rises and falls with the northward position; surface and way type shares are fixed.
 """
@@ -15,6 +16,7 @@ Elevation rises and falls with the northward position; surface and way type shar
 from __future__ import annotations
 
 import io
+import itertools
 import json
 import math
 from typing import Any
@@ -27,6 +29,7 @@ from thresy.tools.route import M_PER_DEG
 ORIGIN = (10.0, 20.0)  # a made-up position (as tests/analysis/synth.py)
 ROUND_TRIP_SIDES = 5
 DETOUR = 0.33  # corner offset as a share of the leg's straight length
+STRAIGHT_BELOW_M = 1200.0
 STEP_M = 25.0
 
 
@@ -51,7 +54,7 @@ def _xy(points: list[tuple[float, float]], origin: tuple[float, float]) -> np.nd
 
 def _densify(xy: np.ndarray, step: float = STEP_M) -> np.ndarray:
     out = [xy[0]]
-    for a, b in zip(xy[:-1], xy[1:], strict=True):
+    for a, b in itertools.pairwise(xy):
         n = max(int(np.hypot(*(b - a)) // step), 1)
         for k in range(1, n + 1):
             out.append(a + (b - a) * k / n)
@@ -154,8 +157,11 @@ class FakeORS:
         origin = points[0]
         xy = _xy(points, origin)
         corners = [xy[0]]
-        for a, b in zip(xy[:-1], xy[1:], strict=True):
+        for a, b in itertools.pairwise(xy):
             d = b - a
+            if np.hypot(*d) < STRAIGHT_BELOW_M:
+                corners.append(b)
+                continue
             normal = np.array([-d[1], d[0]])
             corners += [(a + b) / 2 + normal * DETOUR * side, b]
         dense = _densify(np.array(corners))

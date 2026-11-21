@@ -195,11 +195,21 @@ def test_retraced_tells_a_loop_from_a_there_and_back() -> None:
     loop = rr.measure(track(SQUARE), known=None, segments=[])
     back = rr.measure(track([(0, 0), (5000, 0), (0, 0)]), known=None, segments=[])
     lolli = rr.measure(
-        track([(0, 0), (2000, 0), (2000, 1500), (5000, 1500), (5000, -1500), (2000, -1500),
-               (2000, 0), (0, 0)]),
+        track(
+            [
+                (0, 0),
+                (2000, 0),
+                (2000, 1500),
+                (5000, 1500),
+                (5000, -1500),
+                (2000, -1500),
+                (2000, 0),
+                (0, 0),
+            ]
+        ),
         known=None,
         segments=[],
-    )  # fmt: skip
+    )
     assert loop["retraced_share"] < 0.02 and loop["summary"].startswith("a loop, 10.0 km")
     assert back["retraced_share"] > 0.95
     assert back["summary"].startswith("there and back on the same way (")
@@ -282,8 +292,11 @@ def ors() -> tuple[OpenRouteService, FakeORS]:
 def test_request_shape_key_in_header_not_in_url(ors) -> None:
     service, fake = ors
     start = (10.0, 20.0)
-    paths = service.route(RouteQuery(points=(start,), round_trip_m=8000, seed=3,
-                                     round_trip_points=4, avoid_steps=True))  # fmt: skip
+    paths = service.route(
+        RouteQuery(
+            points=(start,), round_trip_m=8000, seed=3, round_trip_points=4, avoid_steps=True
+        )
+    )
     (request,) = fake.requests
     assert request.method == "POST"
     assert str(request.url) == "https://ors.example/ors/v2/directions/foot-walking/geojson"
@@ -372,8 +385,9 @@ def test_round_trips_are_corrected_towards_the_target(ors) -> None:
 def test_the_request_cap_holds_when_nothing_converges(ors) -> None:
     service, fake = ors
     fake.fixed_round_trip_m = 31_000
-    planned = rp.plan(service, rp.PlanRequest(start=START, end=None, distance_m=10_000,
-                                              candidates=5))  # fmt: skip
+    planned = rp.plan(
+        service, rp.PlanRequest(start=START, end=None, distance_m=10_000, candidates=5)
+    )
     assert len(fake.requests) == rp.MAX_REQUESTS
     assert any("no round trip within 0.25 km" in n for n in planned.notes)
     assert all(p.track.length_m() > 30_000 for p in planned.paths)
@@ -382,8 +396,7 @@ def test_the_request_cap_holds_when_nothing_converges(ors) -> None:
 def test_detours_lengthen_a_route_through_points(ors) -> None:
     service, fake = ors
     via = rp.Via((offset(ORIGIN, 1500, 1500),), "a point")
-    planned = rp.plan(service, rp.PlanRequest(start=START, end=None, vias=[via],
-                                              distance_m=12_000))  # fmt: skip
+    planned = rp.plan(service, rp.PlanRequest(start=START, end=None, vias=[via], distance_m=12_000))
     assert planned.method == "detours"
     base, *detours = planned.paths
     assert base.track.length_m() < 9000
@@ -403,8 +416,7 @@ def test_no_detour_inside_a_segment_and_no_shortening(ors) -> None:
         assert coords[i + 1] == seg_end  # nothing between the segment's start and end
     fake.bodies.clear()
     far = rp.Via((offset(ORIGIN, 8000, 0),), "far")
-    planned = rp.plan(service, rp.PlanRequest(start=START, end=None, vias=[far],
-                                              distance_m=10_000))  # fmt: skip
+    planned = rp.plan(service, rp.PlanRequest(start=START, end=None, vias=[far], distance_m=10_000))
     assert len(fake.bodies) == 1
     assert "already 19.2 km, more than the 10 km target" in planned.notes[0]
 
@@ -495,12 +507,21 @@ def test_picture_with_tiles_and_without_elevation(tmp_path: Path) -> None:
     fake = FakeTiles()
     tiles = rplot.TileSource(OSM_TILE_URL, tmp_path / "cache", mock_client(fake), "© OSM")
     report = rr.measure(track(SQUARE, [100, 100, 180, 180, 100]), known=None, segments=[HILL])
-    path, info = rplot.plot_route("Route 1", report, known=None, lang="de", name="r1",
-                                  out_dir=tmp_path, tiles=tiles, credits=["© ors"])  # fmt: skip
+    path, info = rplot.plot_route(
+        "Route 1",
+        report,
+        known=None,
+        lang="de",
+        name="r1",
+        out_dir=tmp_path,
+        tiles=tiles,
+        credits=["© ors"],
+    )
     assert path == tmp_path / "r1.png" and path.stat().st_size > 10_000
     assert info["tiles"] == "drawn" and 0 < info["fetched"] <= rplot.MAX_TILES
     assert all(r.headers["User-Agent"].startswith("Thresy/") for r in fake.requests)
     bare = rr.measure(track(SQUARE), known=None, segments=[])
-    path, info = rplot.plot_route("Route 2", bare, known=None, lang="en", name="r2",
-                                  out_dir=tmp_path)  # fmt: skip
+    path, info = rplot.plot_route(
+        "Route 2", bare, known=None, lang="en", name="r2", out_dir=tmp_path
+    )
     assert path.is_file() and info == {"tiles": "off"}

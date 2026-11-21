@@ -144,14 +144,13 @@ def _round_trips(budget: _Budget, req: PlanRequest) -> Planned:
         try:
             path = budget.route(query)[0]
         except RoutingError as exc:
-            stopping = exc.kind in STOPPING
-            if exc.kind in ("auth", "point", "limit") or (stopping and not pool):
-                raise
-            if not stopping:  # this seed found nothing: the next one may
+            if exc.kind == "no_route":  # this seed found nothing: the next one may
                 tried.setdefault(seed, []).append((length, math.inf))
                 return True
-            notes.append(f"stopped early: {exc}")
-            return False
+            if pool and exc.kind in STOPPING:  # keep what came
+                notes.append(f"stopped early: {exc}")
+                return False
+            raise
         pool.append(path)
         tried.setdefault(seed, []).append((length, _length(path)))
         return True
@@ -331,10 +330,10 @@ def _detours(
                     _query(req, points=tuple(query_points), radiuses_m=tuple(query_radii))
                 )[0]
             except RoutingError as exc:
-                if exc.kind in STOPPING:
-                    notes.append(f"stopped early: {exc}")
-                    return pool, notes
-                break  # this placement does not work (water, no path): try the next one
+                if exc.kind in ("no_route", "point"):
+                    break  # no path near this detour point (water, a field): the next one
+                notes.append(f"stopped early: {exc}")  # the route through the points stays
+                return pool, notes
             pool.append(path)
             got = _length(path)
             history.append((extra, got))
@@ -357,7 +356,8 @@ def _shape_rank(retraced: float) -> int:
 
 def rank(reports: list[dict[str, Any]], prefer: str, target_m: float | None) -> list[dict]:
     """``reports`` ordered for the athlete: within the target tolerance first, then by the
-    preference (``familiar``: most ground run before; ``new``: least), real loops before
+    preference (``familiar``: most ground run before; ``new``: least; compared in steps of
+    10 %, so a few cells more or less do not outweigh the shape), real loops before
     out-and-back shapes, then by the distance to the target. Near-duplicates (85 % of their
     ground shared) are dropped, keeping the better one."""
 
