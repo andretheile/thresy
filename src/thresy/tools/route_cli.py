@@ -273,15 +273,14 @@ def _picture(
 def _title(n: int | None, report: dict[str, Any]) -> str:
     from thresy.analysis import plots
     from thresy.config import get_settings
+    from thresy.tools.route_report import shape_label
 
-    lab = plots.labels(get_settings().language)
+    lang = get_settings().language
+    lab = plots.labels(lang)
     bits = [f"{report['distance_km']:.1f} km"]
     if report["ascent_m"] is not None:
         bits.append(f"↑ {report['ascent_m']} m ↓ {report['descent_m']} m")
-    if report["retraced_share"] >= 0.5:  # the shape words of route_report
-        bits.append(lab["route_there_back"])
-    else:
-        bits.append(lab["route_loop"] if report["loop"] else lab["route_one_way"])
+    bits.append(shape_label(report, lang))  # the report's shape, in the picture's language
     head = f"{lab['route']} {n}" if n is not None else lab["route"]
     return f"{head} · " + " · ".join(bits)
 

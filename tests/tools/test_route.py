@@ -220,6 +220,34 @@ def test_retraced_tells_a_loop_from_a_there_and_back() -> None:
     assert not one_way["loop"] and one_way["summary"].startswith("point to point, 5.0 km")
 
 
+def test_title_and_report_share_one_source_for_the_shape(monkeypatch) -> None:
+    from thresy.analysis.plots import LABELS
+    from thresy.config import get_settings
+    from thresy.tools.route_cli import _title
+
+    # 6 km out, 3.5 km back: ends 2.5 km from the start, 7 of 9.5 km on the same way
+    report = rr.measure(track([(0, 0), (6000, 0), (2500, 0)]), known=None, segments=[])
+    assert rr.shape_kind(report) == "oneway_mostly_back"
+    assert report["summary"].startswith("point to point, mostly retracing itself (73% retraced)")
+    monkeypatch.chdir(Path(__file__).parent)  # no .env
+    for lang, words in (
+        ("de", "von A nach B, größtenteils auf demselben Weg zurück"),
+        ("en", "point to point, mostly retracing itself"),
+    ):
+        monkeypatch.setenv("COACH_LANGUAGE", lang)
+        get_settings.cache_clear()
+        try:
+            assert _title(1, report).endswith(" · " + words)
+        finally:
+            get_settings.cache_clear()
+    kinds = {
+        f"route_shape_{base}{tail}"
+        for base in ("loop", "oneway")
+        for tail in ("", "_parts", "_mostly_back", "_back")
+    }
+    assert all(kinds <= set(LABELS[lang]) for lang in LABELS)
+
+
 def test_ascent_from_the_profile_and_hill_words() -> None:
     report = rr.measure(track(SQUARE, [100, 100, 180, 180, 100]), known=None, segments=[])
     assert report["ascent_m"] == pytest.approx(80, abs=5)
