@@ -26,7 +26,8 @@ help texts (`coach route plan --help`) are written for the agent and list every 
 - **Surface and way type**: the routing service's shares (paved, unpaved, unknown; asphalt,
   gravel, ...; path, track, street, road, ...). GPX files carry no surface; `show` says so.
 - **Familiar**: the share of the route on ground the athlete's recorded runs passed before.
-  Computed locally (below) and never sent anywhere.
+  Computed locally (below) and never sent anywhere. The picture draws the route solid there and
+  dashed on new ground.
 - **Retraced**: the share of the route on ground the route itself covers twice: a point counts
   when the route passes within 20 m of it again at least 100 m further on. Both passes count, so a
   pure there-and-back is 100 %, a loop 0 %, and a 10 km loop with a 2 km "stick" to and from it
@@ -179,8 +180,9 @@ Every deployment sends its own requests, so heavy use anywhere is the operator's
 cannot meet the policy, or the coach makes many pictures, set `COACH_ROUTE_TILE_URL` to another
 OSM-derived tile service (with its key in the URL if it needs one, and its credit in
 `COACH_ROUTE_TILE_ATTRIBUTION`) or to `none`. Without tiles the picture still shows the route,
-kilometre marks, direction, start and finish, the stored segments, the athlete's known ground, a
-scale bar and the elevation profile.
+kilometre marks, direction, start and finish, the stored segments, a scale bar and the elevation
+profile, with earlier runs as faint 30 m marks underneath (over tiles they are left out, so the
+map stays readable).
 
 ## Attribution
 
