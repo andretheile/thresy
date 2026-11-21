@@ -238,3 +238,8 @@ from thresy.tools import planning_cli as _planning  # noqa: E402
 
 app.registered_commands.extend(_planning.app.registered_commands)
 app.registered_groups.extend(_planning.app.registered_groups)
+
+# coach route plan|show|export (thresy.tools.route_cli)
+from thresy.tools import route_cli as _route  # noqa: E402
+
+app.registered_groups.extend(_route.app.registered_groups)

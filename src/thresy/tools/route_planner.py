@@ -192,7 +192,8 @@ def _round_trips(budget: _Budget, req: PlanRequest) -> Planned:
 
 
 def _waypoints(req: PlanRequest) -> tuple[list[tuple[float, float]], set[int]]:
-    """Points in order, and the legs (index of their first point) that must stay as they are."""
+    """Points in order, and the legs that must stay as they are: leg ``i`` runs from point ``i``
+    to point ``i + 1``, and the leg from a segment's start to its end is locked."""
     points = [(req.start.lat, req.start.lon)]
     locked: set[int] = set()
     for via in req.vias:
@@ -267,7 +268,7 @@ def _placements(
     centre = unique.mean(axis=0)
     out = []
     for leg in range(len(points) - 1):
-        if leg + 1 in locked:  # the leg from a segment's start to its end
+        if leg in locked:  # the leg from a segment's start to its end
             continue
         a, b = xy[leg], xy[leg + 1]
         d = b - a

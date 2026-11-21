@@ -229,7 +229,7 @@ class OpenRouteService:
         profile = "foot-hiking" if query.trails else "foot-walking"
         self.profile = profile
         url = f"{self.base_url}/v2/directions/{profile}/geojson"
-        headers = {"Accept": "application/geo+json, application/json"}
+        headers = {"Accept": "application/geo+json, application/json", "User-Agent": USER_AGENT}
         if self.api_key:
             headers["Authorization"] = self.api_key
         self.requests += 1

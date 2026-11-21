@@ -236,6 +236,11 @@ def target_tolerance_m(target_m: float) -> float:
 # Words ----------------------------------------------------------------------------------------
 
 
+def signed_km(value: float) -> str:
+    """``0.23`` -> ``+0.2 km``; never ``-0.0``."""
+    return f"{round(value, 1) + 0.0:+.1f} km"
+
+
 def _pct(share: float | None) -> str:
     return "-" if share is None else f"{share * 100:.0f}%"
 
@@ -266,7 +271,7 @@ def distance_words(report: dict[str, Any]) -> str:
         return text
     off = report["off_target_km"]
     if report["close_to_target"]:
-        return f"{text}, close to the {report['target_km']:g} km target ({off:+.1f} km)"
+        return f"{text}, close to the {report['target_km']:g} km target ({signed_km(off)})"
     side = "short of" if off < 0 else "over"
     return f"{text}, {abs(off):.1f} km {side} the {report['target_km']:g} km target"
 
@@ -388,7 +393,7 @@ def candidates_text(candidates: list[dict[str, Any]]) -> list[str]:
     for c in candidates:
         row = [str(c["n"]), f"{c['distance_km']:.1f}"]
         if with_target:
-            row.append(f"{c['off_target_km']:+.1f} km" if "target_km" in c else "-")
+            row.append(signed_km(c["off_target_km"]) if "target_km" in c else "-")
         row += [updown(c), _pct(c.get("familiar_share")), _pct(c["retraced_share"])]
         row.append(surface_cell(c))
         rows.append(row)
