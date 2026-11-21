@@ -89,6 +89,8 @@ LABELS: dict[str, dict[str, str]] = {
         "route_no_elevation": "No elevation in this route",
         "route_map": "Map",
         "route_loop": "loop",
+        "route_there_back": "there and back",
+        "route_one_way": "one way",
     },
     "de": {
         "distance": "Strecke [km]",
@@ -135,6 +137,8 @@ LABELS: dict[str, dict[str, str]] = {
         "route_no_elevation": "Keine Höhendaten in dieser Route",
         "route_map": "Karte",
         "route_loop": "Runde",
+        "route_there_back": "hin und zurück",
+        "route_one_way": "einfache Strecke",
     },
 }
 

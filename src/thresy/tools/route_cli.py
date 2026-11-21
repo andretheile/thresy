@@ -268,8 +268,10 @@ def _title(n: int | None, report: dict[str, Any]) -> str:
     bits = [f"{report['distance_km']:.1f} km"]
     if report["ascent_m"] is not None:
         bits.append(f"↑ {report['ascent_m']} m ↓ {report['descent_m']} m")
-    if report["loop"]:
-        bits.append(lab["route_loop"])
+    if report["retraced_share"] >= 0.5:  # the shape words of route_report
+        bits.append(lab["route_there_back"])
+    else:
+        bits.append(lab["route_loop"] if report["loop"] else lab["route_one_way"])
     head = f"{lab['route']} {n}" if n is not None else lab["route"]
     return f"{head} · " + " · ".join(bits)
 
@@ -516,15 +518,17 @@ def _plan_text(
         lines += ["", "Notes:"]
         lines += [f"- route {n} {w}" for n, w in warn]
         lines += [f"- {note}" for note in notes]
+    folder = Path(chosen[0]["file"]).parent if chosen else None
     lines += [
         "",
-        "Files: "
-        + ", ".join(f"out/{c['file_name']}" for c in chosen)
+        f"Files in {folder}: "
+        + ", ".join(c["file_name"] for c in chosen)
         + " (GPX 1.1 tracks without times; the athlete imports them into komoot or Garmin"
         " Connect; send one with coach send document).",
     ]
     if plot:
-        lines.append("Pictures: " + ", ".join(c["picture"] for c in chosen if c.get("picture")))
+        names = [Path(c["picture"]).name for c in chosen if c.get("picture")]
+        lines.append(f"Pictures in {folder}: " + ", ".join(names))
     lines += [
         "Routes follow OpenStreetMap data: a path can be closed, private, unlit or impassable;"
         " the athlete should look at a route before running it.",
@@ -683,7 +687,8 @@ def route_export(
         else ""
     )
     lines = [
-        f"Exported {act.label} [{sel.how}] to out/{file.name}: {len(track)} of"
+        f"Exported {act.label}{'' if sel.how == 'id' else f' [{sel.how}]'} to {file}:"
+        f" {len(track)} of"
         f" {int(pos.sum())} positions kept (within 3 m of the track){recorded}.",
         *single_text(report),
     ]

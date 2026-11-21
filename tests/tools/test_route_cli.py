@@ -19,7 +19,7 @@ import pytest
 from tests.analysis.synth import T0, Phase, put_activity, records
 from thresy.analysis.segments import SegmentDef, upsert_segments
 from thresy.tools import route_plot, route_provider, weather
-from thresy.tools.route import RouteError, Track, write_gpx
+from thresy.tools.route import RouteError, Track, read_gpx, write_gpx
 from thresy.tools.route_history import known_cells, usual_start
 from thresy.tools.route_planner import MAX_REQUESTS
 
@@ -348,6 +348,12 @@ def test_export_a_past_run(conn, history, workspace, env) -> None:
     out = run(["export", "100"], env).output
     assert out.startswith("Exported ") and "out/activity-100.gpx" in out
     assert "familiar: 100%" in out  # the five other runs on the same line
+    # An out-and-back run keeps its turning point: the file is 6 km, not a dot at the start.
+    words = out.splitlines()[1]
+    assert words.startswith("In words: there and back on the same way (")
+    assert ", 6.0 km;" in words
+    back = read_gpx(workspace / "out" / "activity-100.gpx")
+    assert 3 <= len(back) < 50
 
 
 def test_export_refuses_an_activity_without_positions(conn, history, workspace, env) -> None:

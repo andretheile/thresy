@@ -428,7 +428,7 @@ def single_text(report: dict[str, Any]) -> list[str]:
             f" {report['min_ele_m']}-{report['max_ele_m']} m"
         )
     shape = (
-        "loop"
+        "ends where it starts"
         if report["loop"]
         else f"ends {report['start_to_end_m'] / 1000:.1f} km from the start"
     )

@@ -427,17 +427,34 @@ def _route_layer(ax: Any, x: np.ndarray, y: np.ndarray, report: dict[str, Any], 
 def _marks(
     ax: Any, x: np.ndarray, y: np.ndarray, report: dict[str, Any], lab: dict[str, str], plots: Any
 ) -> None:
-    """Kilometre marks, direction arrows, start and finish."""
+    """Kilometre marks, direction arrows, start and finish.
+
+    Arrows sit a little to the right of the direction of travel, so the two directions of an
+    out-and-back part stay apart; a kilometre mark that would cover an earlier one moves to the
+    right as well."""
     cum_km = report["_res"].cum / 1000
     total_km = float(cum_km[-1])
     step = _mark_step_km(total_km)
+    x0, x1 = ax.get_xlim()
+    per_point = (x1 - x0) / (ax.get_position().width * ax.figure.get_figwidth() * 72)
+
+    def right_of_travel(i: int) -> np.ndarray:
+        j0, j1 = max(i - 2, 0), min(i + 2, len(x) - 1)
+        d = np.array([x[j1] - x[j0], y[j1] - y[j0]])
+        norm = float(np.hypot(*d))
+        return np.zeros(2) if norm == 0 else np.array([d[1], -d[0]]) / norm
+
+    drawn: list[np.ndarray] = []
     for k in range(step, int(total_km) + 1, step):
         if total_km - k < 0.4 * step:  # too close to the finish marker
             continue
         i = int(np.searchsorted(cum_km, k))
+        spot = np.array([x[i], y[i]])
+        if any(np.hypot(*(spot - p)) < 16 * per_point for p in drawn):
+            spot = spot + right_of_travel(i) * 18 * per_point
+        drawn.append(spot)
         ax.plot(
-            x[i],
-            y[i],
+            *spot,
             "o",
             markersize=15,
             color="white",
@@ -446,8 +463,7 @@ def _marks(
             zorder=7,
         )
         ax.text(
-            x[i],
-            y[i],
+            *spot,
             str(k),
             ha="center",
             va="center",
@@ -461,16 +477,17 @@ def _marks(
         j = min(i + 3, len(x) - 1)
         if j <= i:
             continue
+        shift = right_of_travel(i) * 7 * per_point
         ax.annotate(
             "",
-            xy=(x[j], y[j]),
-            xytext=(x[i], y[i]),
+            xy=(x[j] + shift[0], y[j] + shift[1]),
+            xytext=(x[i] + shift[0], y[i] + shift[1]),
             zorder=7,
             arrowprops={
                 "arrowstyle": "-|>",
                 "color": plots.RAMP[-1],
                 "lw": 0,
-                "mutation_scale": 18,
+                "mutation_scale": 16,
             },
         )
     loop = report["loop"]

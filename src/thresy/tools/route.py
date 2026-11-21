@@ -328,13 +328,13 @@ def simplify(track: Track, tolerance_m: float) -> np.ndarray:
         a, b = stack.pop()
         if b - a < 2:
             continue
+        # Distance to the segment a-b, not to the line through it: on an out-and-back course
+        # every point lies on that line.
         seg = xy[b] - xy[a]
-        length = float(np.hypot(*seg))
         rel = xy[a + 1 : b] - xy[a]
-        if length < 1e-9:
-            dist = np.hypot(rel[:, 0], rel[:, 1])
-        else:
-            dist = np.abs(seg[0] * rel[:, 1] - seg[1] * rel[:, 0]) / length
+        length2 = float(seg @ seg)
+        t = np.clip(rel @ seg / length2, 0.0, 1.0) if length2 > 1e-12 else np.zeros(len(rel))
+        dist = np.hypot(*(rel - t[:, None] * seg).T)
         k = int(np.argmax(dist))
         if dist[k] > tolerance_m:
             mid = a + 1 + k
