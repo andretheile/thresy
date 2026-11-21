@@ -208,17 +208,22 @@ def _clean(value: Any) -> Any:
     return value
 
 
-def _tiles(settings: Any) -> Any:
+@contextmanager
+def _tiles(settings: Any, wanted: bool) -> Iterator[Any]:
+    """One tile source for all pictures of a command (shared cache and refusal), or ``None``
+    when tiles are off or no picture is wanted."""
     from thresy.tools.route_plot import TileSource, make_tile_client
 
-    if not settings.tile_url:
-        return None
-    return TileSource(
-        url=settings.tile_url,
-        cache_dir=settings.tile_cache_dir,
-        client=make_tile_client(),
-        attribution=settings.tile_attribution,
-    )
+    if not wanted or not settings.tile_url:
+        yield None
+        return
+    with make_tile_client() as client:
+        yield TileSource(
+            url=settings.tile_url,
+            cache_dir=settings.tile_cache_dir,
+            client=client,
+            attribution=settings.tile_attribution,
+        )
 
 
 def _history(conn: Any, box: tuple[float, float, float, float], exclude: int | None = None) -> Any:
@@ -382,26 +387,26 @@ def route_plan(
         reports.append(report)
     chosen = rp.rank(reports, prefer.value, request.distance_m)[:candidates]
     tag = _tag(request, prefer.value)
-    tiles = _tiles(settings) if plot else None
     notes = list(planned.notes)
     if len(chosen) < candidates:
         notes.append(f"{len(chosen)} distinct route(s) found, {candidates} asked for")
-    for n, report in enumerate(chosen, start=1):
-        report["n"] = n
-        report["warnings"] = _warnings(report, request, planned)
-        stem = f"{tag}-{n}"
-        track = simplify_to(report["_path"].track, tolerance_m=1.0, max_points=5000)
-        file = write_gpx(track, out_dir() / f"{stem}.gpx", _gpx_name(n, report))
-        report["file"] = str(file)
-        report["file_name"] = file.name
-        report["gpx_points"] = len(track)
-        if plot:
-            report["picture"], info = _picture(
-                report, _title(n, report), stem, known, tiles, [provider.attribution]
-            )
-            note = _tile_note(info)
-            if note and note not in notes:
-                notes.append(note)
+    with _tiles(settings, plot) as tiles:
+        for n, report in enumerate(chosen, start=1):
+            report["n"] = n
+            report["warnings"] = _warnings(report, request, planned)
+            stem = f"{tag}-{n}"
+            track = simplify_to(report["_path"].track, tolerance_m=1.0, max_points=5000)
+            file = write_gpx(track, out_dir() / f"{stem}.gpx", _gpx_name(n, report))
+            report["file"] = str(file)
+            report["file_name"] = file.name
+            report["gpx_points"] = len(track)
+            if plot:
+                report["picture"], info = _picture(
+                    report, _title(n, report), stem, known, tiles, [provider.attribution]
+                )
+                note = _tile_note(info)
+                if note and note not in notes:
+                    notes.append(note)
     data = {
         "start": {"lat": start_point.lat, "lon": start_point.lon, "how": start_point.label},
         "usual_start": None if usual is None else usual.describe(),
@@ -592,17 +597,13 @@ def route_show(
     report["track_name"] = track.name
     report["points"] = len(track)
     notes = []
-    if plot:
-        report["picture"], info = _picture(
-            report,
-            _title(None, report),
-            f"route-{_safe_stem(path.stem)}",
-            known,
-            _tiles(RouteSettings()),
-            [],
-        )
-        if note := _tile_note(info):
-            notes.append(note)
+    with _tiles(RouteSettings(), plot) as tiles:
+        if plot:
+            report["picture"], info = _picture(
+                report, _title(None, report), f"route-{_safe_stem(path.stem)}", known, tiles, []
+            )
+            if note := _tile_note(info):
+                notes.append(note)
     report["notes"] = notes
     named = f', track "{track.name}"' if track.name else ""
     lines = [f"Route file: {path}{named}, {len(track)} points", *single_text(report)]
@@ -678,12 +679,13 @@ def route_export(
         }
     )
     notes = []
-    if plot:
-        report["picture"], info = _picture(
-            report, _title(None, report), f"activity-{act.id}", known, _tiles(RouteSettings()), []
-        )
-        if note := _tile_note(info):
-            notes.append(note)
+    with _tiles(RouteSettings(), plot) as tiles:
+        if plot:
+            report["picture"], info = _picture(
+                report, _title(None, report), f"activity-{act.id}", known, tiles, []
+            )
+            if note := _tile_note(info):
+                notes.append(note)
     report["notes"] = notes
     recorded = (
         f"; the watch recorded {report['recorded_distance_km']:.2f} km"

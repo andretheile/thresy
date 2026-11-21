@@ -226,11 +226,11 @@ package.
 
 ```sh
 COACH_ROUTE_API_KEY=<key> COACH_WORKSPACE_DIR=/tmp/route-check COACH_ROUTE_TILE_URL=none \
-  uv run coach route plan --start 49.41461,8.681495 --distance 5 --candidates 2
+  uv run coach route plan --start <LAT,LON> --distance 5 --candidates 2
 ```
 
-(The start is the example coordinate of openrouteservice's own documentation, in Heidelberg.)
-It should print two loops of about 5 km with ascent and surface shares, and files under
+Use the coordinates of a public place, such as a town square, not a home. It should print two
+loops of about 5 km with ascent and surface shares, and files under
 `/tmp/route-check/out/`. Add `--plot` and drop `COACH_ROUTE_TILE_URL=none` to try the tiles.
 
 ## Limits

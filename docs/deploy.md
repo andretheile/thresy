@@ -245,12 +245,12 @@ instead. Check it once the stack runs:
 docker compose run --rm --no-deps --user agent bridge sh -c \
   'set -a; . /home/agent/.thresy/credentials.env; set +a; cd /tmp &&
    COACH_WORKSPACE_DIR=/tmp/w COACH_ROUTE_TILE_URL=none \
-   coach route plan --start 49.41461,8.681495 --distance 5 --candidates 1'
+   coach route plan --start <LAT,LON> --distance 5 --candidates 1'
 ```
 
-It should print one loop of about 5 km (the start is openrouteservice's own documentation
-example). Without a routing service `coach route show` and `coach route export` still work, and
-`coach route plan` says what to set.
+With the coordinates of a public place (a town square, not a home) it should print one loop of
+about 5 km. Without a routing service `coach route show` and `coach route export` still work,
+and `coach route plan` says what to set.
 
 ## 10. Telegram
 
