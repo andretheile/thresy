@@ -125,7 +125,7 @@ public data service, so take it from a free account used for nothing else.
    account replaced the old openrouteservice.org developer dashboard).
 2. In the dashboard, request a token on the free Standard plan. The key is shown there; quotas
    per day and per minute are shown next to it.
-3. Put it into `COACH_ROUTE_API_KEY` (docs/deploy.md, "Routes", has the safer place on a server).
+3. Put it into `COACH_ROUTE_API_KEY` in `.env` (docs/deploy.md, "Routes").
 4. Check it with the command under "Checking a key" below.
 
 The quota of the free plan is enough for a coach: one `coach route plan` sends at most 10

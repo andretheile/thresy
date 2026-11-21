@@ -66,9 +66,9 @@ They take effect when the database volume is created (step 6); changing them lat
   night" mean.
 - `COACH_LANGUAGE` (`en`, `de`, ...) and `COACH_NAME` (what the coach calls itself).
 - `COACH_HOME_LOCATION` for `coach weather`, if you want weather in the briefings.
-- Routes (optional, docs/routes.md): `COACH_ROUTE_URL` for a self-hosted openrouteservice, and
-  `COACH_ROUTE_TILE_URL=none` if the route pictures should fetch no OpenStreetMap tiles. The
-  routing key is better placed in the agent's credential file (step 9, "Routes").
+- Routes (optional, docs/routes.md): `COACH_ROUTE_API_KEY` for the hosted openrouteservice
+  (step 9, "Routes", says where to get one) or `COACH_ROUTE_URL` for a self-hosted instance, and
+  `COACH_ROUTE_TILE_URL=none` if the route pictures should fetch no OpenStreetMap tiles.
 - Leave the Garmin, Telegram and backup values for their steps below.
 
 ## 4. Choose and pin the agent CLI
@@ -222,29 +222,15 @@ shows the date.
 
 `coach route plan` needs a routing service (docs/routes.md). With the hosted openrouteservice,
 create a free account at <https://account.heigit.org/>, request a token on the Standard plan in
-its dashboard, and add the key to the agent's credential file. Append it (`>>`), so the model
-credential in the same file stays:
+its dashboard, set it as `COACH_ROUTE_API_KEY` in `.env`, and run `docker compose up -d bridge`.
 
-```sh
-docker compose run --rm --no-deps --user agent bridge sh -c '
-  umask 077
-  printf "Routing key: "; stty -echo; read -r key; stty echo; echo
-  printf "COACH_ROUTE_API_KEY=%s\n" "$key" >> /home/agent/.thresy/credentials.env
-  echo saved'
-```
-
-There the key reaches only the agent's own processes, never the bridge's environment. Setting
-`COACH_ROUTE_API_KEY` in `.env` also works (the bridge then hands it to the agent). It is the one
-kind of key the agent may hold: it grants nothing but queries, so use an account for nothing
-else. To replace it, edit the file as the agent user (`docker compose run --rm --no-deps --user
-agent bridge vi /home/agent/.thresy/credentials.env`, if the image has an editor, or rewrite the
-file with both lines). A self-hosted instance needs no key: set `COACH_ROUTE_URL` in `.env`
-instead. Check it once the stack runs:
+The bridge hands the key to the agent. It is the one kind of key the agent may hold: it grants
+nothing but queries, so take it from an account that is used for nothing else. A self-hosted
+instance needs no key: set `COACH_ROUTE_URL` in `.env` instead. Check it once the stack runs:
 
 ```sh
 docker compose run --rm --no-deps --user agent bridge sh -c \
-  'set -a; . /home/agent/.thresy/credentials.env; set +a; cd /tmp &&
-   COACH_WORKSPACE_DIR=/tmp/w COACH_ROUTE_TILE_URL=none \
+  'cd /tmp && COACH_WORKSPACE_DIR=/tmp/w COACH_ROUTE_TILE_URL=none \
    coach route plan --start <LAT,LON> --distance 5 --candidates 1'
 ```
 
