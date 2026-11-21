@@ -22,7 +22,7 @@ Code, comments and docs are in English. The language the coach speaks is a deplo
 4. **Postgres is the single store.** No SQLite, Parquet or DuckDB. Raw Garmin payloads are kept as `jsonb` so derived columns can be recomputed.
 5. **Open-source ready: nothing athlete-specific in git.** `legacy/` and `private/` are ignored. Everything that belongs to one athlete comes from configuration, the database, or `private/`: names, places, coordinates, segment definitions, race lists, paces, heart-rate values, memory files, Garmin activity ids. None of it may appear in code, tests, docs, fixtures or commit messages. Fixtures in the repo are synthetic. Tests that need real data read it from `COACH_LEGACY_DIR`, pick their inputs dynamically (for example "the first three FIT files"), compare against the legacy store rather than against hard-coded numbers, and skip when the directory is unset or missing.
 6. **Subscription auth.** With Claude Code the model is reached through the subscription token (`CLAUDE_CODE_OAUTH_TOKEN`). Never pass `--bare` (bare mode ignores that token).
-7. **Least privilege for the agent.** The agent has a shell and reads the web, so treat it as the least trusted part of the system. It gets its own database role (`coach_agent`), an environment built from an allow-list rather than inherited from the service, and no access to Telegram, Garmin or Google credentials or to the volumes that hold them. Anything with an external side effect (Garmin writes, calendar changes) is carried out by a service on the agent's request, never by the agent directly. Secrets are never stored in database tables.
+7. **Least privilege for the agent.** The agent has a shell and reads the web, so treat it as the least trusted part of the system. It gets its own database role (`coach_agent`), an environment built from an allow-list rather than inherited from the service, and no access to Telegram, Garmin or Google credentials or to the volumes that hold them. Anything with an external side effect (Garmin writes, calendar changes) is carried out by a service on the agent's request, never by the agent directly. Secrets are never stored in database tables. One kind of key may be handed to the agent: the key of a public, read-only data service that one of its own tools queries (the routing service behind `coach route`). Such a key grants nothing but queries, comes from a free account that is used for nothing else, and is still kept out of logs.
 
 ## Components
 
@@ -299,7 +299,7 @@ The sync poller inserts; the bridge consumes and sets `processed_at`. `dedupe_ke
 
 ### Agent requests
 
-The agent cannot reach Garmin or any other external service itself. When it needs a service to act, a `coach` command inserts a row into `agent_requests` and can wait for the result; the owning service picks it up, sets `status`, and writes `result` or `error`. The bridge uses the same table for chat commands such as `/sync`.
+The agent's own tools only read public data services (weather, routing). The agent cannot reach Garmin or any other service that holds the athlete's account or changes something outside. When it needs a service to act, a `coach` command inserts a row into `agent_requests` and can wait for the result; the owning service picks it up, sets `status`, and writes `result` or `error`. The bridge uses the same table for chat commands such as `/sync`.
 
 | kind | handled by | payload | result |
 |---|---|---|---|
@@ -380,7 +380,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## CLI contract
 
-`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init|scripts` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
+`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach route plan|show|export` (see `docs/routes.md`) · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init|scripts` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
 
 ## Configuration
 
@@ -388,7 +388,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`, `COACH_<NAME>_PASS_ENV` (parent variables the agent may inherit), `COACH_<NAME>_EXIT_WAIT_S`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
 
-Further settings, each documented with its package: `COACH_HOME_LOCATION` (default place for `coach weather`), `COACH_SYNC_*` (docs/sync.md), `COACH_BRIDGE_*` (docs/bridge.md), `COACH_BACKUP_*` (docs/backup.md), `COACH_AGENT_USER` and `COACH_AGENT_USER_HELPER` (the user switch, docs/runners.md).
+Further settings, each documented with its package: `COACH_HOME_LOCATION` (default place for `coach weather`), `COACH_ROUTE_*` (routing service, its key and the map tiles for `coach route`, docs/routes.md; the bridge hands them to the agent), `COACH_SYNC_*` (docs/sync.md), `COACH_BRIDGE_*` (docs/bridge.md), `COACH_BACKUP_*` (docs/backup.md), `COACH_AGENT_USER` and `COACH_AGENT_USER_HELPER` (the user switch, docs/runners.md).
 
 Garmin (sync only): `COACH_GARMIN_EMAIL`, `COACH_GARMIN_PASSWORD`, `COACH_GARMIN_TOKEN_DIR`. Model credential (bridge only), by harness: `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `CURSOR_API_KEY`. In `Settings` an empty value counts as unset.
 
@@ -430,6 +430,18 @@ An environment allow-list alone does not isolate the agent: a process can read t
 - `out/` for files the agent produces, `inbox/` for files the athlete sent.
 
 Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat message and it sends nothing in between unless it carries content; the exact reply `NO_REPLY` sends nothing; "last night" means `wake_date` equal to today; numbers come from `coach` commands or SQL, never from memory of earlier conversations; anything it should remember goes into `memory/` or the plan tables, because sessions end daily.
+
+## Routes
+
+`coach route` plans running routes and reads route files (`thresy.tools`, docs/routes.md). Its contract:
+
+- **One routing interface.** Routes are computed on OpenStreetMap data by a routing service behind one small interface. openrouteservice is the first provider, either the hosted service with a free key or a self-hosted instance by URL. Nothing outside that interface knows the provider. Without a configured service, planning fails with a message that says what to set; reading and exporting route files still work.
+- **Files out, nothing stored.** A route is a GPX file in the workspace's `out/`, optionally with a picture (map and elevation profile). Nothing is written to the database, and the tool never writes to Garmin, komoot or any other account: the athlete imports the file themselves. Sending a course to Garmin will be an `agent_requests` kind with confirmation, not part of this tool.
+- **History stays local.** How much of a route lies on ground the athlete has run before, and which stored segments it passes, is computed from the database. Recorded tracks are reduced to grid cells in SQL; a command never loads the samples of many activities into Python, because the agent shares the bridge's memory limit.
+- **What leaves the machine.** A routing request carries the coordinates of the start and of the points to pass. With map tiles switched on, the tile server sees which tiles are fetched. Nothing else is sent: no history, no name, no activity ids. docs/routes.md and the README say so.
+- **Honest numbers.** The command reports the distance and ascent the route actually has, including when a requested distance could not be met, and reports a value it does not have (surface, elevation) as missing.
+- **Attribution and policies.** Pictures carry the attribution the map data and the services require. Tiles are fetched within the tile server's usage policy (identifying user agent, on-disk cache, a few tiles per picture) and can be switched off.
+- **Tests never reach the network.** The routing service and the tile server are replaced in tests; fixtures use invented coordinates.
 
 ## Backups
 
