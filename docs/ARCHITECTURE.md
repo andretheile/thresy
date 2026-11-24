@@ -36,6 +36,7 @@ Code, comments and docs are in English. The language the coach speaks is a deplo
 | Transport | `thresy.transport` | Telegram now, web later |
 | Bridge | `thresy.bridge` | Chat loop, sessions, event dispatcher, outbox delivery |
 | Tools | `thresy.tools` | Weather, calendar, routes, `coach send` |
+| Web | `thresy.web` | Read-only dashboard for the athlete in a browser, behind a login (optional service) |
 | Coach workspace | `workspace/` | Template of the directory the agent runs in: `AGENTS.md`, playbooks, memory skeleton |
 
 ## Repository layout
@@ -380,7 +381,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 ## CLI contract
 
-`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach route plan|show|export` (see `docs/routes.md`) · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init|scripts` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
+`coach db migrate` · `coach import legacy [--limit N]` · `coach sync once|poll|backfill|login|request|status` · `coach analysis …` (see `docs/analysis.md`) · `coach weather` · `coach route plan|show|export` (see `docs/routes.md`) · `coach web run|password|demo` (see `docs/web.md`) · `coach plan …` · `coach races …` · `coach backup run|restore-check|status|schedule` · `coach workspace init|scripts` · `coach runner check [--isolation]` · `coach sql "<select>"` (read-only role) · `coach send text|photo|choice …` (writes `outbox`) · `coach bridge run` · `coach runner check`. Commands print human-readable text by default and JSON with `--json`.
 
 ## Configuration
 
@@ -388,7 +389,7 @@ Only allow-listed chat ids are accepted; everything else is dropped.
 
 Per runner (`<NAME>` is `CLAUDE`, `CODEX` or `CURSOR`): `COACH_<NAME>_BIN`, `COACH_<NAME>_ARGS`, `COACH_<NAME>_PERMISSION_ARGS`, `COACH_<NAME>_MODEL_FAST`, `COACH_<NAME>_MODEL_SMART`, `COACH_<NAME>_ENV`, `COACH_<NAME>_PASS_ENV` (parent variables the agent may inherit), `COACH_<NAME>_EXIT_WAIT_S`. A package that needs more settings defines its own settings class from `thresy.config.SETTINGS_CONFIG`.
 
-Further settings, each documented with its package: `COACH_HOME_LOCATION` (default place for `coach weather`), `COACH_ROUTE_*` (routing service, its key and the map tiles for `coach route`, docs/routes.md; the bridge hands them to the agent), `COACH_SYNC_*` (docs/sync.md), `COACH_BRIDGE_*` (docs/bridge.md), `COACH_BACKUP_*` (docs/backup.md), `COACH_AGENT_USER` and `COACH_AGENT_USER_HELPER` (the user switch, docs/runners.md).
+Further settings, each documented with its package: `COACH_HOME_LOCATION` (default place for `coach weather`), `COACH_ROUTE_*` (routing service, its key and the map tiles for `coach route`, docs/routes.md; the bridge hands them to the agent), `COACH_WEB_*` (the dashboard, its password hash and session secret, docs/web.md; only the `web` service gets them), `COACH_SYNC_*` (docs/sync.md), `COACH_BRIDGE_*` (docs/bridge.md), `COACH_BACKUP_*` (docs/backup.md), `COACH_AGENT_USER` and `COACH_AGENT_USER_HELPER` (the user switch, docs/runners.md).
 
 Garmin (sync only): `COACH_GARMIN_EMAIL`, `COACH_GARMIN_PASSWORD`, `COACH_GARMIN_TOKEN_DIR`. Model credential (bridge only), by harness: `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_API_KEY`, `CURSOR_API_KEY`. In `Settings` an empty value counts as unset.
 
@@ -407,6 +408,8 @@ Each service gets only the environment and volumes it needs; there is no blanket
 Volumes: `db-data`; `app-data` (`COACH_DATA_DIR`, original FIT files: read/write in `sync`, read-only in `bridge`, so the agent cannot alter source data); `garmin-auth` (`sync` only); `workspace` and `agent-home` (`bridge` only). Files the agent produces, such as plots, go under `out/` in the workspace, and `coach send` accepts paths only from there. `bridge` holds all three database URLs and hands the agent only the `coach_agent` and `coach_ro` ones. `ANTHROPIC_API_KEY` must stay unset where subscription auth is used, because it takes precedence over the subscription token. The agent CLI version is pinned in the image and upgraded deliberately.
 
 A fifth service, `backup`, runs `coach backup schedule` with read-only mounts of the data and workspace volumes and its own `backups` volume (see "Backups").
+
+An optional sixth service, `web` (Compose profile `web`), runs `coach web run` from the same image with only the read-only database URL and its own secrets, and is published by the deployment's reverse proxy (see "Web dashboard").
 
 The model credential is not in any service's environment: it sits in a file in the agent's home volume that only the agent user can read, and the user-switch helper loads it after switching. The `bridge` container keeps only the SETUID and SETGID capabilities, which that helper needs; every other service drops all capabilities and sets no-new-privileges. Services run from a working directory the agent cannot write, because settings may be read from a `.env` file there.
 
@@ -430,6 +433,17 @@ An environment allow-list alone does not isolate the agent: a process can read t
 - `out/` for files the agent produces, `inbox/` for files the athlete sent.
 
 Rules the agent follows, stated in `AGENTS.md`: its final reply is the chat message and it sends nothing in between unless it carries content; the exact reply `NO_REPLY` sends nothing; "last night" means `wake_date` equal to today; numbers come from `coach` commands or SQL, never from memory of earlier conversations; anything it should remember goes into `memory/` or the plan tables, because sessions end daily.
+
+## Web dashboard
+
+`thresy.web` serves a dashboard for the athlete in a browser: an overview of what the database knows (last night, this week's plan against what was run, recent runs, trends, races, the state of the sync). It is optional and off unless configured (docs/web.md). Its contract:
+
+- **Read-only.** The service connects with the `coach_ro` role and nothing else. It cannot change data, send messages or start agent runs. Chatting with the coach in the browser would be a transport (`thresy.transport`) and is not part of the dashboard. Numbers come from the same functions as the `coach analysis` commands, so the page and the coach never disagree.
+- **Behind a login, always.** Every page and every data request needs a session; only the login page and its assets are public. One athlete, one password: only a salted hash of it is configured (`coach web password` generates a password and its hash), sessions are signed cookies (`HttpOnly`, `Secure`, `SameSite=Lax`) that expire, and failed logins are rate-limited per client and overall. There is no default password: without a configured hash and session secret the service refuses to start.
+- **Private by construction.** Pages are sent with `noindex`, `no-store`, a strict content security policy without inline script, and no framing. The browser talks only to the service: no fonts, scripts, map tiles or analytics from third parties.
+- **Least privilege.** The service gets the read-only database URL and its own two secrets. It never gets Garmin, Telegram, model, routing or backup credentials or the workspace, and it drops all capabilities like the other services. Its secrets are kept out of logs.
+- **Behind a reverse proxy.** The service listens on a Compose network and is published by the deployment's reverse proxy, which terminates TLS; Thresy still publishes no host port. The proxy-specific part (labels, network, certificate resolver, host name) is deployment configuration: the base `compose.yml` holds none of it, and host names live in the deployment's `.env`. Client addresses are taken from a forwarded header only when the deployment says which proxy to trust.
+- **A demo without data.** `coach web demo` renders the dashboard from synthetic data, for screenshots, review and the documentation. Nothing athlete-specific is in git, as everywhere.
 
 ## Routes
 
