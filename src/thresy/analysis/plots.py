@@ -108,7 +108,6 @@ LABELS: dict[str, dict[str, str]] = {
         "grades_km": "Distance [km]",
         "grades_share": "Share of the course [%]",
         "grades_steep": "steep",
-        "grades_up": "up",
     },
     "de": {
         "distance": "Strecke [km]",
@@ -171,7 +170,6 @@ LABELS: dict[str, dict[str, str]] = {
         "grades_km": "Strecke [km]",
         "grades_share": "Anteil der Strecke [%]",
         "grades_steep": "steil",
-        "grades_up": "hoch",
     },
 }
 
