@@ -771,6 +771,49 @@ def test_labels_stay_inside_and_clear_of_each_other(tmp_path, drawn, shape) -> N
     assert "Hill near home" in [t for t, _ in _boxes(ax_profile)]
 
 
+def test_a_long_title_wraps_instead_of_widening_the_picture(tmp_path, drawn) -> None:
+    from PIL import Image
+
+    report = rr.measure(track(SQUARE, [100, 100, 180, 180, 100]), known=None, segments=[])
+    short = "Route 1 · 10.0 km · ↑ 80 m ↓ 80 m · eine Runde"
+    long = "Route 3 · 12.4 km · ↑ 143 m ↓ 143 m · " + rr.shape_label(
+        {"retraced_share": 0.6, "loop": False}, "de"
+    )
+    assert len(long) > 75
+    sizes = {}
+    for name, title in (("short", short), ("long", long)):
+        path, _ = rplot.plot_route(
+            title, report, known=None, lang="de", name=name, out_dir=tmp_path
+        )
+        with Image.open(path) as img:
+            sizes[name] = img.size
+    assert sizes["long"][0] == sizes["short"][0]  # as wide as the map, no blank strip
+    assert sizes["long"][1] > sizes["short"][1]  # a second line of title
+    fig = drawn[-1]
+    text = fig._suptitle.get_text()
+    assert text == "Route 3 · 12.4 km · ↑ 143 m ↓ 143 m\n" + long.split(" · ")[-1]
+    box = fig._suptitle.get_window_extent(fig.canvas.get_renderer())
+    map_box = fig.axes[0].get_window_extent(fig.canvas.get_renderer())
+    assert box.x1 <= map_box.x1 and box.y0 > map_box.y1  # inside the width, above the map
+    assert drawn[0]._suptitle.get_text() == short  # a title that fits stays on one line
+
+
+def test_a_title_shrinks_when_two_lines_are_not_enough() -> None:
+    from thresy.analysis import plots
+
+    plt = plots._plt()
+    fig = plt.figure(figsize=(3, 2))
+
+    def parts(n: int) -> str:
+        return " · ".join(["Abschnitt"] * n)
+
+    assert rplot.fit_title(fig, parts(4), 2.9, 13.0) == (parts(2) + "\n" + parts(2), 13.0)
+    assert rplot.fit_title(fig, parts(6), 2.9, 13.0) == (parts(3) + "\n" + parts(3), 11.0)
+    text, size = rplot.fit_title(fig, parts(12), 2.9, 13.0)  # more lines only at the minimum
+    assert size == rplot.TITLE_MIN_PT and text.count("\n") == 3
+    plt.close(fig)
+
+
 def test_a_name_without_room_goes_into_the_legend(tmp_path, drawn, monkeypatch) -> None:
     monkeypatch.setattr(rplot._Labels, "place", lambda self, *args, **kw: None)
     report = rr.measure(track(SQUARE, [100, 100, 180, 180, 100]), known=None, segments=[HILL])

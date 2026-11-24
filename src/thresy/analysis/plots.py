@@ -257,8 +257,11 @@ def _pace_series(df: pd.DataFrame, window_s: int = 10) -> np.ndarray:
     return pace.where(speed >= 1.0).to_numpy()
 
 
-def _title(fig: Any, text: str) -> None:
-    fig.suptitle(text, x=0.01, ha="left", fontsize=13, fontweight="bold", color=INK)
+TITLE_PT = 13.0
+
+
+def _title(fig: Any, text: str, size: float = TITLE_PT) -> None:
+    fig.suptitle(text, x=0.01, ha="left", fontsize=size, fontweight="bold", color=INK)
 
 
 def _legend(ax: Any) -> None:

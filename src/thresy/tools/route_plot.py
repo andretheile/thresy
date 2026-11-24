@@ -288,6 +288,50 @@ NEW_DASHES = (0, (1.6, 1.1))
 """Dash pattern of the route on new ground, in multiples of the line width."""
 KM_MARK_PT = 15.0
 START_MARK_PT = 14.0
+TITLE_MIN_PT = 10.0
+TITLE_SEP = " · "
+
+
+def fit_title(fig: Any, text: str, width_in: float, size: float) -> tuple[str, float]:
+    """The title wrapped and sized to fit ``width_in``, so it never makes the picture wider
+    than the map (the picture is saved with a tight bounding box).
+
+    In this order: the whole title on one line; two lines broken at the ``·`` separators (or at
+    spaces inside a part too long for a line); the same at a smaller size, down to
+    :data:`TITLE_MIN_PT`; at that size as many lines as it takes. Returns the text with its line
+    breaks and the font size."""
+    renderer = fig.canvas.get_renderer()
+    probe = fig.text(0, 0, "", fontweight="bold")
+
+    def fits(line: str, pt: float) -> bool:
+        probe.set_text(line)
+        probe.set_fontsize(pt)
+        return probe.get_window_extent(renderer).width / fig.dpi <= width_in
+
+    def wrap(pt: float) -> list[str]:
+        lines: list[str] = []
+        for part in text.split(TITLE_SEP):
+            pieces = [part] if fits(part, pt) else part.split(" ")
+            for k, piece in enumerate(pieces):
+                sep = TITLE_SEP if k == 0 else " "
+                if lines and fits(lines[-1] + sep + piece, pt):
+                    lines[-1] += sep + piece
+                else:
+                    lines.append(piece)
+        return lines
+
+    try:
+        if fits(text, size):
+            return text, size
+        pt = size
+        while pt >= TITLE_MIN_PT:
+            lines = wrap(pt)
+            if len(lines) <= 2:
+                return "\n".join(lines), pt
+            pt -= 1.0
+        return "\n".join(wrap(TITLE_MIN_PT)), TITLE_MIN_PT
+    finally:
+        probe.remove()
 
 
 def _extent(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float]:
@@ -443,8 +487,12 @@ def plot_route(
     aspect = (extent[3] - extent[2]) / (extent[1] - extent[0])
     map_w = FIG_W_IN - 0.1
     map_h = map_w * aspect
-    height = TITLE_IN + map_h + LEGEND_IN + PROFILE_IN + BOTTOM_IN
-    fig = plt.figure(figsize=(FIG_W_IN, height))
+    fig = plt.figure(figsize=(FIG_W_IN, 1.0))
+    # The title starts at 1 % of the width (plots._title) and ends where the map ends.
+    title, title_pt = fit_title(fig, title, map_w + 0.05 - 0.01 * FIG_W_IN, plots.TITLE_PT)
+    title_in = TITLE_IN + title.count("\n") * title_pt * 1.25 / 72
+    height = title_in + map_h + LEGEND_IN + PROFILE_IN + BOTTOM_IN
+    fig.set_size_inches(FIG_W_IN, height)
     map_bottom = BOTTOM_IN + PROFILE_IN + LEGEND_IN
     ax = fig.add_axes((0.05 / FIG_W_IN, map_bottom / height, map_w / FIG_W_IN, map_h / height))
     ax_p = fig.add_axes(
@@ -526,7 +574,7 @@ def plot_route(
         top=(BOTTOM_IN + PROFILE_IN + LEGEND_IN - 0.08) / height,
     )
     _profile(ax_p, report, lab, plots)
-    plots._title(fig, title)
+    plots._title(fig, title, title_pt)
     return plots._save(fig, name, out_dir), info
 
 
