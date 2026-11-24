@@ -320,6 +320,41 @@ def test_templates_use_known_texts() -> None:
         assert f"nav_{key}" in TEXTS["en"]
 
 
+@pytest.mark.parametrize(
+    ("lang", "diff", "expected"),
+    [
+        (EN, 7.0, "The second half was 7 s/km slower."),
+        (DE, 7.0, "Die zweite Hälfte war 7 s/km langsamer."),
+        (EN, -12.4, "Negative split: the second half was 12 s/km faster."),
+        (DE, -12.4, "Negativer Split: die zweite Hälfte war 12 s/km schneller."),
+        (EN, 65.0, "The second half was 1:05 min/km slower."),
+        (DE, 65.0, "Die zweite Hälfte war 1:05 min/km langsamer."),
+        (EN, 1.5, "Even halves."),
+        (DE, -1.5, "Gleichmäßige Hälften."),
+    ],
+)
+def test_halves_sentence_carries_its_unit(lang: Lang, diff: float, expected: str) -> None:
+    assert pages.halves_sentence(lang, {"pace_diff_s_per_km": diff}) == expected
+
+
+def test_no_difference_without_a_unit() -> None:
+    """A placeholder right before "/km" must be a pace (4:35 /km), never a difference."""
+    for code, texts in TEXTS.items():
+        for key, value in texts.items():
+            for name in re.findall(r"\{(\w+)\}\s*/km", value):
+                assert name == "pace", (code, key)
+    assert EN.pace_delta(7.2) == "7 s/km" and DE.pace_delta(-65) == "1:05 min/km"
+    assert EN.signed_seconds(-7) == "−7 s" and EN.signed_seconds(0.3) == "±0 s"
+    assert EN.signed_seconds(75) == "+1:15 min"
+
+
+@pytest.mark.parametrize("lang", [EN, DE], ids=["en", "de"])
+def test_resting_heart_rate_deltas_carry_their_unit(lang: Lang) -> None:
+    rhr = pages.overview_page(DemoSource("full", lang.code), lang, coach_name="T")["night"]["rhr"]
+    assert rhr["usual"].endswith(lang.t("unit_bpm"))
+    assert rhr["delta"] == lang.t("as_usual") or lang.t("unit_bpm") in rhr["delta"]
+
+
 def test_number_and_date_formats() -> None:
     assert EN.num(1234.5, 1) == "1,234.5"
     assert DE.num(1234.5, 1) == "1.234,5"

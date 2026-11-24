@@ -257,20 +257,24 @@ def _night(source: Source, lang: Lang, today: date) -> dict[str, Any]:
         "rhr": {
             "value": lang.int(rhr) if rhr is not None else "–",
             "delta": (
-                lang.t("vs_usual", delta=lang.signed(rhr_delta, 0))
+                lang.t("vs_usual", delta=f"{lang.signed(rhr_delta, 0)} {lang.t('unit_bpm')}")
                 if rhr_delta is not None and round(rhr_delta) != 0
                 else lang.t("as_usual")
                 if rhr_delta is not None
                 else ""
             ),
-            "usual": f"{lang.int(rhr_low)}–{lang.int(rhr_high)}" if rhr_low is not None else "",
+            "usual": (
+                f"{lang.int(rhr_low)}–{lang.int(rhr_high)} {lang.t('unit_bpm')}"
+                if rhr_low is not None
+                else ""
+            ),
             "strip": charts.range_strip(
                 rhr,
                 rhr_low,
                 rhr_high,
                 lang,
                 w=150,
-                unit="bpm",
+                unit=lang.t("unit_bpm"),
                 hue="accent",
                 label=lang.t("resting_hr"),
             ),
@@ -543,6 +547,21 @@ SMOOTH_S = 30
 effort rather than GPS noise."""
 
 
+EVEN_S_PER_KM = 2.0
+"""Halves whose paces differ by less than this count as even."""
+
+
+def halves_sentence(lang: Lang, halves: dict[str, Any]) -> str:
+    """The first half against the second, from ``activity.halves``: faster, slower or even,
+    with the difference and its unit."""
+    diff = halves["pace_diff_s_per_km"]
+    if diff <= -EVEN_S_PER_KM:
+        return lang.t("negative_split", diff=lang.pace_delta(diff))
+    if diff >= EVEN_S_PER_KM:
+        return lang.t("positive_split", diff=lang.pace_delta(diff))
+    return lang.t("even_split")
+
+
 def _downsample(df: pd.DataFrame, n: int = 240) -> pd.DataFrame:
     """Mean of each of ``n`` equal distance bins (moving samples only for the pace)."""
     if df.empty or df["dist"].iloc[-1] <= 0:
@@ -760,13 +779,7 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
         {
             "n": lang.num(s["end_m"] / 1000, 1) if s["dist_m"] < 990 else s["n"],
             "pace": lang.pace(s["pace_s_per_km"]),
-            "delta": (
-                ("−" if d < 0 else "+") + lang.clock(abs(d))[-4:].lstrip("0").lstrip(":")
-                if d is not None and round(abs(d)) >= 1
-                else "±0"
-            )
-            if d is not None
-            else "",
+            "delta": lang.signed_seconds(d) if d is not None else "",
             "faster": d is not None and d < 0,
             "bar": charts.split_bar(d, scale),
             "hr": lang.int(s["avg_hr"]) if s.get("avg_hr") else "–",
@@ -778,16 +791,7 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
     out["avg_pace"] = lang.pace(avg)
     halves = summary.get("halves")
     if halves and halves.get("pace_diff_s_per_km") is not None:
-        diff = halves["pace_diff_s_per_km"]
-        if halves["negative_split"]:
-            out["halves_text"] = lang.t("negative_split")
-        elif abs(diff) < 2:
-            out["halves_text"] = lang.t("even_split")
-        else:
-            out["halves_text"] = lang.t(
-                "positive_split",
-                diff=lang.pace(diff).lstrip("0:") if diff < 60 else lang.pace(diff),
-            )
+        out["halves_text"] = halves_sentence(lang, halves)
         out["halves"] = [
             {
                 "pace": lang.pace(halves[h]["pace_s_per_km"]),

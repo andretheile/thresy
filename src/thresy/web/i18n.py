@@ -177,8 +177,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "profile_hint": "Point at a chart to read the values at that distance.",
         "splits": "Splits",
         "halves": "First and second half",
-        "negative_split": "Negative split: the second half was faster.",
-        "positive_split": "The second half was {diff} /km slower.",
+        "negative_split": "Negative split: the second half was {diff} faster.",
+        "positive_split": "The second half was {diff} slower.",
         "even_split": "Even halves.",
         "drift": "Heart-rate drift",
         "drift_text": "{bpm} bpm drift, {pct} % decoupling",
@@ -475,8 +475,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "profile_hint": "Zeig auf ein Diagramm, um die Werte an dieser Stelle zu lesen.",
         "splits": "Kilometer",
         "halves": "Erste und zweite Hälfte",
-        "negative_split": "Negativer Split: die zweite Hälfte war schneller.",
-        "positive_split": "Die zweite Hälfte war {diff} /km langsamer.",
+        "negative_split": "Negativer Split: die zweite Hälfte war {diff} schneller.",
+        "positive_split": "Die zweite Hälfte war {diff} langsamer.",
         "even_split": "Gleichmäßige Hälften.",
         "drift": "Pulsdrift",
         "drift_text": "{bpm} S/min Drift, {pct} % Entkopplung",
@@ -693,6 +693,25 @@ class Lang:
             return "–"
         total = round(float(s_per_km))  # type: ignore[arg-type]
         return f"{total // 60}:{total % 60:02d}"
+
+    def pace_delta(self, seconds: float | None) -> str:
+        """A difference in pace, without sign: ``7 s/km``, ``1:05 min/km``."""
+        if _missing(seconds):
+            return "–"
+        total = round(abs(float(seconds)))  # type: ignore[arg-type]
+        if total < 60:
+            return f"{total} s/km"
+        return f"{total // 60}:{total % 60:02d} min/km"
+
+    def signed_seconds(self, seconds: float | None) -> str:
+        """A difference in time with its sign and unit: ``+7 s``, ``-1:05 min`` (with a
+        typographic minus), ``±0 s``."""
+        if _missing(seconds):
+            return "–"
+        total = round(float(seconds))  # type: ignore[arg-type]
+        sign = "±" if total == 0 else "+" if total > 0 else "−"
+        total = abs(total)
+        return f"{sign}{total} s" if total < 60 else f"{sign}{total // 60}:{total % 60:02d} min"
 
     def clock(self, seconds: float | None) -> str:
         """A duration as a clock: ``48:10``, ``1:02:05``."""
