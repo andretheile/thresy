@@ -397,7 +397,7 @@ def daily_range(
             d = _poly(upper) + "".join(f"L{_f(x)},{_f(y)}" for x, y in reversed(lower)) + "Z"
             svg.path(d, f"band-{hue}")
     if bars:
-        bw = max(1.5, min(8.0, step * 0.62))
+        bw = max(1.5, min(8.0, step * 0.5))
         for i, v in enumerate(values):
             if v is not None:
                 svg.bar_up(X(i) - bw / 2, Y(v), bw, Y(y0), f"bar-{hue}-soft", r=min(2, bw / 2))

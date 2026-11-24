@@ -17,13 +17,15 @@
     <div class="seg-fig">
       <div class="label"><i></i>{{ L.t("best") }}</div>
       <div class="big-num">{{ s.best.time }}</div>
-      <div class="when">{% call m.link(url("run", id=s.best.activity_id)) %}{{ s.best.date }}{% endcall %} · {{ s.best.pace }} /km · {{ s.best.hr }} {{ L.t("unit_bpm") }}</div>
+      <div class="when">{% call m.link(url("run", id=s.best.activity_id)) %}{{ s.best.date }}{% endcall %}</div>
+      <div class="when nowrap">{{ s.best.pace }} /km · {{ s.best.hr }} {{ L.t("unit_bpm") }}</div>
     </div>
     {% if s.latest and not s.latest_is_best %}
     <div class="seg-fig">
       <div class="label"><i class="latest"></i>{{ L.t("latest") }}</div>
       <div class="big-num">{{ s.latest.time }}{% if s.delta %}<span class="u">+{{ s.delta }}</span>{% endif %}</div>
-      <div class="when">{% call m.link(url("run", id=s.latest.activity_id)) %}{{ s.latest.date }}{% endcall %} · {{ s.latest.pace }} /km · {{ s.latest.hr }} {{ L.t("unit_bpm") }}</div>
+      <div class="when">{% call m.link(url("run", id=s.latest.activity_id)) %}{{ s.latest.date }}{% endcall %}</div>
+      <div class="when nowrap">{{ s.latest.pace }} /km · {{ s.latest.hr }} {{ L.t("unit_bpm") }}</div>
     </div>
     {% endif %}
   </div>

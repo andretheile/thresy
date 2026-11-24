@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head">
   <h1>{{ date_long }}</h1>
-  {% call m.link(url("data"), "sync-pill" ~ ("" if sync.last else " is-off")) %}{{ sync.text }}{% endcall %}
+  {% call m.link(url("data"), "sync-pill" ~ ("" if sync.ok else " is-off")) %}{{ sync.text }}{% endcall %}
 </div>
 
 {{ m.notice_list(notices) }}
@@ -53,7 +53,7 @@
         <span class="moon">{{ m.icon("moonstar") }}</span>
         <div>
           <p class="session-title">{{ L.t("night_pending_title") }}</p>
-          <p class="muted">{{ L.t("night_pending_text") }}</p>
+          <p class="muted">{{ L.t("night_blocked_text" if night.blocked else "night_pending_text") }}</p>
           <p class="small faint">{{ night.latest }}</p>
         </div>
       </div>

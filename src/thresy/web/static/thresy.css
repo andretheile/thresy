@@ -151,8 +151,9 @@ small, .small { font-size: 13px; }
 /* -- the frame -------------------------------------------------------------------------------- */
 
 .demo-bar {
-  background: var(--ink);
-  color: var(--bg);
+  background: var(--panel-2);
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule);
   font-size: 13px;
   padding: 7px var(--gutter);
   text-align: center;
@@ -546,7 +547,7 @@ details.table-view .table-wrap { max-height: 360px; overflow-y: auto; }
 .bar-accent.is-partial { fill: color-mix(in srgb, var(--accent) 62%, var(--panel)); }
 .bar-accent-soft.is-partial { fill: color-mix(in srgb, var(--accent-soft) 62%, var(--panel)); }
 .bar-plan { fill: var(--accent-ghost); }
-.bar-muted { fill: var(--rule-2); }
+.bar-muted { fill: color-mix(in srgb, var(--ink-3) 55%, transparent); }
 .bar-rest-soft { fill: var(--rest-soft); }
 .bar-accent-soft.rest { fill: var(--rest-soft); }
 .today-wash { fill: var(--accent-wash); }
@@ -620,6 +621,11 @@ details.table-view .table-wrap { max-height: 360px; overflow-y: auto; }
   min-height: 20px; font-variant-numeric: tabular-nums;
 }
 .readout b { color: var(--ink); font-weight: 650; }
+.readout:empty { display: none; }
+.readout .hint { color: var(--ink-3); }
+@media (max-width: 599px) {
+  .runs .row { grid-template-columns: 38px 1fr auto; gap: 2px 10px; }
+}
 
 /* -- run page --------------------------------------------------------------------------------- */
 
@@ -658,6 +664,14 @@ details.table-view .table-wrap { max-height: 360px; overflow-y: auto; }
 .race-mini .days { text-align: right; }
 .race-mini .days b { display: block; font-size: 28px; font-weight: 750; letter-spacing: -0.03em; line-height: 1; }
 .race-mini .days span { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+
+.race-list { list-style: none; margin: 0; padding: 0; }
+.race-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: center; padding: 12px 0; }
+.race-list li + li { border-top: 1px solid var(--rule); }
+.race-list .name { font-weight: 650; font-size: 16px; }
+.race-list .figure-r { text-align: right; display: grid; justify-items: end; }
+.race-list .figure-r b { font-size: 22px; font-weight: 720; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.race-list .figure-r span { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* -- segments --------------------------------------------------------------------------------- */
 
@@ -752,7 +766,8 @@ details.table-view .table-wrap { max-height: 360px; overflow-y: auto; }
   .col { display: grid; gap: 20px; align-content: start; }
   .run-layout { grid-template-columns: 380px minmax(0, 1fr); align-items: start; gap: 20px; }
   .run-layout .span-2 { grid-column: 1 / -1; }
-  .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+  .grid.two .span-2 { grid-column: 1 / -1; }
 }
 
 @media print {

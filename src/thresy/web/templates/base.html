@@ -55,7 +55,7 @@
 <main class="{% block main_class %}{% endblock %}">
 {% block content %}{% endblock %}
 <footer class="foot">
-  {% if sync %}<span class="sync-pill{% if not sync.last %} is-off{% endif %}">{{ sync.text }}</span>{% endif %}
+  {% if sync %}<span class="sync-pill{% if not sync.ok %} is-off{% endif %}">{{ sync.text }}</span>{% endif %}
   {% call m.link(url("data")) %}{{ L.t("data_title") }}{% endcall %}
   <span class="sp">Thresy{% if demo %} · {{ L.t("demo_badge") }}{% endif %}</span>
 </footer>

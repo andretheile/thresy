@@ -59,11 +59,22 @@ def run_row(a: Activity, lang: Lang, today: date) -> dict[str, Any]:
     }
 
 
+def sync_broken(state: dict[str, Any], now: datetime) -> bool:
+    """The Garmin login needs renewing, or the sync keeps failing: no new data arrives."""
+    sync, auth = state["sync_status"], state["garmin_auth"]
+    if auth.get("status") not in (None, "ok"):
+        return True
+    last_ok = parse_utc(sync.get("last_success_at"))
+    stale = last_ok is not None and now - last_ok > timedelta(hours=SYNC_STALE_H)
+    return stale or int(sync.get("consecutive_failures") or 0) >= 3
+
+
 def sync_line(source: Source, lang: Lang) -> dict[str, Any]:
     state = source.state()
     last = parse_utc(state["sync_status"].get("last_success_at"))
     return {
         "last": last,
+        "ok": last is not None and not sync_broken(state, source.now()),
         "text": lang.t("synced_ago", ago=lang.ago(last, source.now()))
         if last
         else lang.t("never_synced"),
@@ -491,7 +502,10 @@ def overview_page(source: Source, lang: Lang, *, coach_name: str) -> dict[str, A
         "today": today,
         "date_long": lang.date_long(today),
         "notices": notices(source, lang),
-        "night": _night(source, lang, today),
+        "night": {
+            **_night(source, lang, today),
+            "blocked": sync_broken(source.state(), source.now()),
+        },
         "today_plan": today_day["workouts"],
         "today_runs": today_day["runs"],
         "has_plan": week["has_plan"],
@@ -729,6 +743,7 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
         "hr": [lang.int(v) if v == v else "–" for v in ds["hr"].tolist()],
         "alt": [lang.int(v) if v == v else "–" for v in ds["alt"].tolist()],
         "labels": [lang.t("profile_pace"), lang.t("profile_hr"), lang.t("profile_alt")],
+        "hint": lang.t("profile_hint"),
         "units": ["/km", lang.t("unit_bpm"), "m"],
     }
     # track with kilometre marks

@@ -126,6 +126,21 @@ def test_new_athlete_pages_look_intended(new: DemoSource) -> None:
     assert len(pages.trim_weeks(new.weeks(new.today(), 26)["weeks"])) == pages.MIN_WEEKS_SHOWN
 
 
+def test_trouble_is_shown_calmly_and_honestly() -> None:
+    source = DemoSource("trouble", "en")
+    ctx = pages.overview_page(source, EN, coach_name="Thresy")
+    titles = [n["title"] for n in ctx["notices"]]
+    assert titles == [EN.t("notice_auth_title"), EN.t("notice_backup_title")]
+    assert ctx["night"]["state"] == "pending" and ctx["night"]["blocked"]
+    assert not ctx["sync"]["ok"]
+    html = Renderer(EN).render("overview.html", ctx)
+    assert esc(EN.t("night_blocked_text")) in html
+    assert "sync-pill is-off" in html
+    data = Renderer(EN).render("data.html", pages.data_page(source, EN))
+    assert "quota is exceeded" in data
+    assert pages.overview_page(DemoSource("full", "en"), EN, coach_name="T")["sync"]["ok"]
+
+
 def test_shorten_keeps_words_and_drops_markdown() -> None:
     short, more = pages.shorten("**Today:** easy " + "word " * 100, limit=40)
     assert more and short.endswith("…") and "**" not in short

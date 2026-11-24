@@ -11,8 +11,10 @@ run. :class:`DemoSource` answers the dashboard's questions in the shapes of the 
 functions that :class:`thresy.web.source.DbSource` calls; ``tests/web/test_demo_parity.py``
 loads :func:`build` into a database and checks that both sources agree.
 
-Scenarios: ``full`` (the default) and ``new`` (an athlete who just connected Garmin: three
-runs, last night not synced yet, no plan, races or segments), for the empty states.
+Scenarios: ``full`` (the default), ``new`` (an athlete who just connected Garmin: three runs,
+last night not synced yet, no plan, races or segments) for the empty states, and ``trouble``
+(``full`` with an expired Garmin login, so last night never arrived, and failing backups) for
+the notices.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ RECORDS_DAYS = 70
 after an import of old history)."""
 LAT0, LON0 = 10.0, 20.0
 M_PER_DEG = 111_320.0
-SCENARIOS = ("full", "new")
+SCENARIOS = ("full", "new", "trouble")
 
 NAMES = {
     "en": {
@@ -262,6 +264,7 @@ def simulate(spec: RunSpec) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     total = spec.distance_m
     grade_at = np.interp(np.arange(0, int(total) + 2, dtype=float), cum, grade_r).tolist()
     n_max = int(total / 0.6) + 600
+    form = float(rng.normal(0, 3.0))  # how the heart rate runs on the day
     speed_noise = rng.normal(0, 0.035, n_max).tolist()
     hr_noise = rng.normal(0, 0.6, n_max).tolist()
     dist = 0.0
@@ -287,7 +290,7 @@ def simulate(spec: RunSpec) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
                 stop_left -= 1
             dist = min(total, dist + speed)
             # heart rate follows effort with a lag, and creeps up over long runs
-            effort = 136 + 27 * (speed - 3.0) + 260 * max(g, -0.03)
+            effort = 136 + form + 27 * (speed - 3.0) + 260 * max(g, -0.03)
             steady = (effort if speed > 0 else 118) + 0.045 * max(0, t - 1800) / 60
             tau = 22.0 if steady > hr else 38.0
             hr += (steady - hr) / tau + hr_noise[t]
@@ -1084,7 +1087,34 @@ def build(scenario: str = "full", lang: str = "en") -> DemoData:
     _build_segments(data, rng)
     _build_messages(data)
     _build_state(data)
+    if scenario == "trouble":
+        _make_trouble(data)
     return data
+
+
+def _make_trouble(data: DemoData) -> None:
+    """Everything that should catch the owner's eye: the Garmin login has expired a day ago
+    (so last night never arrived), and the last two backups failed."""
+    now = data.now
+    data.wellness.pop(data.today, None)
+    data.levels.pop(data.today, None)
+    data.messages = [m for m in data.messages if m["trigger"] != "morning_briefing"]
+    last_ok = (now - timedelta(hours=26)).isoformat()
+    data.state["sync_status"] = {
+        "last_attempt_at": (now - timedelta(minutes=6)).isoformat(),
+        "last_success_at": last_ok,
+        "consecutive_failures": 31,
+        "last_error": "Garmin login needed",
+        "last_error_kind": "auth",
+        "last_error_at": (now - timedelta(minutes=6)).isoformat(),
+    }
+    data.state["garmin_auth"] = {"status": "login_failed", "reason": "the session expired"}
+    data.state["backup_status"] = {
+        **data.state["backup_status"],
+        "last_success_at": (now - timedelta(days=2, hours=4)).isoformat(),
+        "failures_in_row": 2,
+        "last_error": "upload refused: the bucket's quota is exceeded",
+    }
 
 
 # -- the source ------------------------------------------------------------------------------------

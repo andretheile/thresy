@@ -10,7 +10,7 @@
 {% else %}
 {{ m.notice_list(notices) }}
 {% endif %}
-<div class="grid section">
+<div class="grid two section">
   <section class="panel" aria-labelledby="h-sync">
     <div class="panel-head"><h2 id="h-sync">{{ L.t("sync") }}</h2></div>
     {{ rows(sync_rows) }}
@@ -19,7 +19,7 @@
     <div class="panel-head"><h2 id="h-backup">{{ L.t("backup") }}</h2></div>
     {% if backup_rows %}{{ rows(backup_rows) }}{% else %}<p class="muted">{{ L.t("no_backup") }}</p>{% endif %}
   </section>
-  <section class="panel" aria-labelledby="h-counts">
+  <section class="panel span-2" aria-labelledby="h-counts">
     <div class="panel-head"><h2 id="h-counts">{{ L.t("data_counts") }}</h2></div>
     {{ rows(count_rows) }}
   </section>

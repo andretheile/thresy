@@ -82,6 +82,10 @@ TEXTS: dict[str, dict[str, str]] = {
             "Last night's sleep has not arrived from Garmin yet. It usually does once the"
             " watch syncs in the morning."
         ),
+        "night_blocked_text": (
+            "Last night's sleep has not arrived, and it cannot while the Garmin sync is not"
+            " working (see above)."
+        ),
         "night_latest": "Latest night: {date}, {dur}",
         "night_none": "No sleep data yet. Nights appear here once the watch has recorded one.",
         "night_synced_at": "arrived {time}",
@@ -168,6 +172,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "profile_pace": "Pace",
         "profile_hr": "Heart rate",
         "profile_alt": "Altitude",
+        "profile_hint": "Point at a chart to read the values at that distance.",
         "splits": "Splits",
         "halves": "First and second half",
         "negative_split": "Negative split: the second half was faster.",
@@ -372,6 +377,10 @@ TEXTS: dict[str, dict[str, str]] = {
             "Die letzte Nacht ist noch nicht von Garmin gekommen. Meist kommt sie, sobald die"
             " Uhr morgens synchronisiert."
         ),
+        "night_blocked_text": (
+            "Die letzte Nacht ist nicht angekommen, und sie kann es nicht, solange die"
+            " Garmin-Synchronisierung nicht funktioniert (siehe oben)."
+        ),
         "night_latest": "Letzte erfasste Nacht: {date}, {dur}",
         "night_none": (
             "Noch keine Schlafdaten. Nächte erscheinen hier, sobald die Uhr eine aufgezeichnet hat."
@@ -458,6 +467,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "profile_pace": "Pace",
         "profile_hr": "Puls",
         "profile_alt": "Höhe",
+        "profile_hint": "Zeig auf ein Diagramm, um die Werte an dieser Stelle zu lesen.",
         "splits": "Kilometer",
         "halves": "Erste und zweite Hälfte",
         "negative_split": "Negativer Split: die zweite Hälfte war schneller.",

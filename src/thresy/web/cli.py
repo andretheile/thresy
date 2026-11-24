@@ -16,7 +16,12 @@ from thresy.cli import fail
 app = typer.Typer(help="The web dashboard (docs/web.md).", no_args_is_help=True)
 
 DemoScenario = Annotated[
-    str, typer.Option("--scenario", help="full: months of data; new: an athlete who just started.")
+    str,
+    typer.Option(
+        "--scenario",
+        help="full: two years of data; new: an athlete who just started; trouble: full with"
+        " an expired Garmin login and failing backups.",
+    ),
 ]
 
 

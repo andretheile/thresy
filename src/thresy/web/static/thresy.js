@@ -110,11 +110,21 @@
       });
     }
   }
+  function hint() {
+    if (!readout || !data.hint) return;
+    while (readout.firstChild) readout.removeChild(readout.firstChild);
+    var span = document.createElement("span");
+    span.className = "hint";
+    span.textContent = data.hint;
+    readout.appendChild(span);
+  }
   function clear() {
     Array.prototype.forEach.call(document.querySelectorAll("g.xhair"), function (g) {
       while (g.firstChild) g.removeChild(g.firstChild);
     });
+    hint();
   }
+  hint();
   function onMove(ev) {
     var rect = ev.currentTarget;
     var svg = rect.ownerSVGElement;
