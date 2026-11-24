@@ -447,6 +447,52 @@ def test_charts_are_well_formed_svg(full: DemoSource) -> None:
     assert count > 40
 
 
+def close_years(today: date, this_year_km: float, last_year_km: float) -> list[dict[str, Any]]:
+    """Two years whose totals on ``today``'s day are close: steady running, a run every
+    other day."""
+    doy = today.timetuple().tm_yday
+    out = []
+    for year, total in ((today.year - 1, last_year_km), (today.year, this_year_km)):
+        end = doy if year == today.year else 365
+        per_run = total / (doy / 2)
+        pts, cum = [(1, 0.0)], 0.0
+        for day in range(2, end + 1, 2):
+            cum += per_run
+            pts.append((day, round(cum, 1)))
+        out.append({"year": year, "points": pts, "total": cum})
+    return out
+
+
+@pytest.mark.parametrize("w", [358, 840])
+@pytest.mark.parametrize(("this_km", "last_km"), [(2460, 2350), (2350, 2460), (2400, 2400)])
+def test_year_labels_touch_no_line_and_no_label(
+    monkeypatch: pytest.MonkeyPatch, w: int, this_km: float, last_km: float
+) -> None:
+    seen: list[tuple[Any, list[charts.Label]]] = []
+    real = charts.year_labels
+
+    def spy(lines: Any, markers: Any, **kw: Any) -> list[charts.Label]:
+        labels = real(lines, markers, **kw)
+        seen.append(((lines, markers, kw), labels))
+        return labels
+
+    monkeypatch.setattr(charts, "year_labels", spy)
+    today = date(2030, 4, 18)
+    svg = str(charts.year_lines(close_years(today, this_km, last_km), EN, w=w, today=today))
+    ET.fromstring(svg)
+    (lines, markers, _), labels = seen[0]
+    current = next(label for label in labels if label.year == today.year)
+    assert current.lines[1][0] == f"{EN.int(this_km)} km"
+    for label in labels:
+        for pts in lines.values():
+            assert not charts.line_hits_box(pts, label.box), (label.year, label.box)
+        if label is current:
+            for cx, cy, r in markers:
+                assert not charts.circle_hits_box(cx, cy, r, label.box)
+        for other in labels:
+            assert other is label or not charts.boxes_overlap(label.box, other.box)
+
+
 def test_chart_text_is_escaped() -> None:
     svg = charts.Svg(100, 20, label='<b>"x"</b>')
     svg.text(0, 10, "<script>")
