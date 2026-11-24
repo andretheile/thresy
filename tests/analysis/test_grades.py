@@ -247,6 +247,27 @@ def test_words_follow_the_thresholds() -> None:
     assert "about as much climbing per km (12 vs 10 m)" in gr.comparison_words(a, b, 50.0)
 
 
+def test_the_words_and_smoothing_of_coach_route() -> None:
+    from thresy.tools import route_report as rr
+
+    assert gr.HILL_LEVELS_M_PER_KM == rr.HILL_LEVELS_M_PER_KM
+    assert gr.HILL_WORDS == rr.HILL_WORDS
+    assert (gr.FILE_STEP_M, gr.FILE_SMOOTH_M) == (rr.STEP_M, rr.ELE_SMOOTH_M)
+
+
+def test_the_analysis_package_imports_no_tools() -> None:
+    """thresy.tools uses thresy.analysis; the other way round only at call time (GPX files)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, thresy.analysis.grades, thresy.analysis.cli; "
+        "print([m for m in sys.modules if m.startswith('thresy.tools')])"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "[]"
+
+
 def test_thresholds_are_checked() -> None:
     with pytest.raises(AnalysisError, match="flat-pct"):
         gr.compare([course(KNOWN)], gr.Thresholds(flat_pct=6))
