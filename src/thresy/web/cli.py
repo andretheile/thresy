@@ -118,7 +118,12 @@ def password(
     from thresy.web.security import generate_password, hash_password
 
     if stdin:
-        value = sys.stdin.readline().rstrip("\r\n")
+        if sys.stdin.isatty():
+            import getpass
+
+            value = getpass.getpass("Password (not shown): ")
+        else:
+            value = sys.stdin.readline().rstrip("\r\n")
         if len(value) < 12:
             raise fail("the password is shorter than 12 characters; choose a longer one")
         typer.echo(f"COACH_WEB_PASSWORD_HASH={hash_password(value)}")

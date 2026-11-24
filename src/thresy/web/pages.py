@@ -565,7 +565,7 @@ SMOOTH_S = 30
 effort rather than GPS noise."""
 
 
-def _downsample(df: pd.DataFrame, n: int = 300) -> pd.DataFrame:
+def _downsample(df: pd.DataFrame, n: int = 240) -> pd.DataFrame:
     """Mean of each of ``n`` equal distance bins (moving samples only for the pace)."""
     if df.empty or df["dist"].iloc[-1] <= 0:
         return pd.DataFrame()
@@ -819,16 +819,16 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
         ]
     drift = summary.get("drift") or {}
     if drift.get("decoupling_pct") is not None:
+        pct = drift["decoupling_pct"]
+        # below about 5 % the pace was held without the heart rate creeping up
+        # (docs/analysis.md); a clearly faster second half makes the number meaningless
+        verdict = "drift_faster" if pct <= -5 else "drift_good" if pct < 5 else "drift_high"
         out["drift"] = {
             "text": lang.t(
-                "drift_text",
-                bpm=lang.signed(drift["drift_bpm"], 0),
-                pct=lang.num(drift["decoupling_pct"], 1),
+                "drift_text", bpm=lang.signed(drift["drift_bpm"], 0), pct=lang.num(pct, 1)
             ),
-            "verdict": lang.t("drift_good")
-            if drift["decoupling_pct"] < 5
-            else lang.t("drift_high"),
-            "good": drift["decoupling_pct"] < 5,
+            "verdict": lang.t(verdict),
+            "good": verdict == "drift_good",
         }
     out["climbs"] = [
         {
