@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ L.t("races") }}</h1></div>
+
+{% if not next and not upcoming and not past %}
+<p class="empty">{{ L.t("races_none") }}</p>
+{% endif %}
+
+{% if next %}
+<section class="panel" aria-labelledby="h-next">
+  <div class="panel-head">
+    <h2 id="h-next">{{ L.t("next_race") }}</h2>
+    {% if next.priority %}<span class="aside"><span class="badge{% if next.priority_key == 'A' %} is-a{% endif %}">{{ next.priority }}</span></span>{% endif %}
+  </div>
+  <div class="race-hero">
+    <div>
+      <p class="name">{{ next.name }}</p>
+      <p class="meta"><span>{{ next.date_long }}</span>{% if next.start %}<span>{{ next.start }}</span>{% endif %}{% if next.location %}<span>{{ next.location }}</span>{% endif %}</p>
+      <div class="goal">
+        {% if next.distance %}<div class="stat"><div class="label">{{ L.t("distance") }}</div><div class="value">{{ next.distance }}</div></div>{% endif %}
+        {% if next.elev %}<div class="stat"><div class="label">{{ L.t("ascent") }}</div><div class="value">{{ next.elev }}</div></div>{% endif %}
+        {% if next.goal %}<div class="stat"><div class="label">{{ L.t("goal") }}</div><div class="value">{{ next.goal }}</div></div>{% endif %}
+      </div>
+    </div>
+    <div class="countdown" role="img" aria-label="{{ next.days }} {{ next.days_text }}">
+      {{ next.ring }}
+      <div class="n">{% if next.days == 0 %}<b>!</b><span>{{ L.t("race_today") }}</span>{% else %}<b>{{ next.days }}</b><span>{{ next.days_text }}</span>{% endif %}</div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if upcoming %}
+<section class="section" aria-labelledby="h-up">
+  <h2 id="h-up">{{ L.t("upcoming") }}</h2>
+  <div class="panel">
+    <ul class="race-list">
+      {% for r in upcoming %}
+      <li>
+        <div>
+          <p class="name">{{ r.name }}{% if r.status != "planned" and r.status_text %} <span class="badge">{{ r.status_text }}</span>{% endif %}</p>
+          <p class="meta"><span>{{ r.date_text }}</span>{% if r.distance %}<span>{{ r.distance }}</span>{% endif %}{% if r.priority %}<span>{{ r.priority }}</span>{% endif %}</p>
+        </div>
+        <div class="figure-r">{% if r.goal %}<b>{{ r.goal }}</b><span>{{ L.t("goal") }}</span>{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endif %}
+
+{% if past %}
+<section class="section" aria-labelledby="h-res">
+  <h2 id="h-res">{{ L.t("results") }}</h2>
+  <div class="panel">
+    <ul class="race-list">
+      {% for r in past %}
+      <li>
+        <div>
+          <p class="name">{% if r.activity_id %}{% call m.link(url("run", id=r.activity_id)) %}{{ r.name }}{% endcall %}{% else %}{{ r.name }}{% endif %}</p>
+          <p class="meta"><span>{{ r.date_text }}</span>{% if r.distance %}<span>{{ r.distance }}</span>{% endif %}{% if r.goal %}<span>{{ L.t("goal") }} {{ r.goal }}</span>{% endif %}</p>
+        </div>
+        <div class="figure-r">
+          {% if r.time %}
+          <b>{{ r.time }}</b>
+          <span>{% if r.pace %}{{ r.pace }} /km{% endif %}{% if r.place %} · {{ r.place }}{% endif %}{% if r.time_source == "watch" %} · {{ L.t("watch_time") }}{% endif %}</span>
+          {% else %}
+          <b class="muted">{{ r.status_text or "–" }}</b>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

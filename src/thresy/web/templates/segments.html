@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ L.t("segments") }}</h1></div>
+{% if not segments %}
+<p class="empty">{{ L.t("segments_none") }}</p>
+{% endif %}
+<div class="grid">
+{% for s in segments %}
+<section class="panel" aria-labelledby="h-{{ s.key }}">
+  <div class="panel-head">
+    <h2 id="h-{{ s.key }}">{{ s.name }}</h2>
+    <span class="aside">{% if s.distance %}{{ s.distance }} · {% endif %}{% if s.gain %}{{ s.gain }} · {% endif %}{{ s.count }}</span>
+  </div>
+  {% if s.best %}
+  <div class="seg-figs">
+    <div class="seg-fig">
+      <div class="label"><i></i>{{ L.t("best") }}</div>
+      <div class="big-num">{{ s.best.time }}</div>
+      <div class="when">{% call m.link(url("run", id=s.best.activity_id)) %}{{ s.best.date }}{% endcall %}</div>
+      <div class="when nowrap">{{ s.best.pace }} /km · {{ s.best.hr }} {{ L.t("unit_bpm") }}</div>
+    </div>
+    {% if s.latest and not s.latest_is_best %}
+    <div class="seg-fig">
+      <div class="label"><i class="latest"></i>{{ L.t("latest") }}</div>
+      <div class="big-num">{{ s.latest.time }}{% if s.delta %}<span class="u">+{{ s.delta }}</span>{% endif %}</div>
+      <div class="when">{% call m.link(url("run", id=s.latest.activity_id)) %}{{ s.latest.date }}{% endcall %}</div>
+      <div class="when nowrap">{{ s.latest.pace }} /km · {{ s.latest.hr }} {{ L.t("unit_bpm") }}</div>
+    </div>
+    {% endif %}
+  </div>
+  {% if s.chart %}{{ s.chart }}<p class="chart-note">{{ L.t("segment_chart_sub") }}</p>{% endif %}
+  {% else %}
+  <p class="empty">{{ L.t("segment_no_efforts") }}</p>
+  {% endif %}
+</section>
+{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }}{% endblock %}
+{% block body_class %}login-body{% endblock %}
+{% block shell %}
+<main class="login error-box" aria-labelledby="h-err">
+  {{ m.brand() }}
+  <h1 id="h-err">{{ heading }}</h1>
+  <p>{{ text }}</p>
+  {% if home %}<p><a class="more" href="{{ home }}">{{ L.t("back_home") }}{{ m.icon("chevron") }}</a></p>{% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,99 @@
+{# Shared pieces: icons (stroked, currentColor), the brand, links that work in every mode. #}
+
+{% macro icon(name, cls="") -%}
+<svg{% if cls %} class="{{ cls }}"{% endif %} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+{%- if name == "today" -%}
+<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>
+{%- elif name == "runs" -%}
+<path d="M4 18h3.5l3-9 3 6 2-3H20"/>
+{%- elif name == "trends" -%}
+<path d="M4 19V5M4 19h16"/><path d="M8 15v-3M12 15V9M16 15v-5"/>
+{%- elif name == "races" -%}
+<path d="M6 21V4M6 4h11l-2.5 4L17 12H6"/>
+{%- elif name == "segments" -%}
+<path d="M3 18l5-7 4 4 5-8 4 6"/><circle cx="17" cy="7" r="1.3" fill="currentColor"/>
+{%- elif name == "data" -%}
+<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6"/>
+{%- elif name == "sun" -%}
+<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>
+{%- elif name == "moon" -%}
+<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/>
+{%- elif name == "auto" -%}
+<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor"/>
+{%- elif name == "check" -%}
+<path d="M5 12.5l4.2 4.2L19 7"/>
+{%- elif name == "skip" -%}
+<circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/>
+{%- elif name == "alert" -%}
+<path d="M12 3.5 2.5 20h19Z"/><path d="M12 10v4.5M12 17.3v.2"/>
+{%- elif name == "info" -%}
+<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8v.2"/>
+{%- elif name == "chevron" -%}
+<path d="M9 5l7 7-7 7"/>
+{%- elif name == "back" -%}
+<path d="M15 5l-7 7 7 7"/>
+{%- elif name == "down" -%}
+<path d="M6 9l6 6 6-6"/>
+{%- elif name == "moonstar" -%}
+<path d="M19 14.5A7.5 7.5 0 1 1 9.5 5a6 6 0 0 0 9.5 9.5Z"/><path d="M17 3v3M15.5 4.5h3"/>
+{%- elif name == "split" -%}
+<path d="M4 18 10 6l4 8 2-4 4 8"/>
+{%- elif name == "heart" -%}
+<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"/>
+{%- elif name == "logout" -%}
+<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>
+{%- endif -%}
+</svg>
+{%- endmacro %}
+
+{% macro brand(href=None) -%}
+{%- set mark -%}
+<svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true"><rect class="mark-bg" width="24" height="24" rx="6.5"/><path class="mark-line" d="M5 16h5.5l3-8H19"/></svg><span class="word">thresy</span>
+{%- endset -%}
+{%- if href %}<a class="brand" href="{{ href }}" aria-label="Thresy">{{ mark }}</a>{% else %}<span class="brand">{{ mark }}</span>{% endif -%}
+{%- endmacro %}
+
+{# A link that is plain text when the page is exported as one file. #}
+{% macro link(href, cls="") -%}
+{%- if href %}<a href="{{ href }}"{% if cls %} class="{{ cls }}"{% endif %}>{{ caller() }}</a>{% else %}<span{% if cls %} class="{{ cls }}"{% endif %}>{{ caller() }}</span>{% endif -%}
+{%- endmacro %}
+
+{% macro notice_list(items) -%}
+{% if items %}
+<div class="notices" role="status">
+  {% for n in items %}
+  <div class="notice{% if n.level == 'info' %} is-info{% endif %}">
+    {{ icon("alert" if n.level == "attention" else "info") }}
+    <div><b>{{ n.title }}</b><p>{{ n.text }}</p></div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro status_badge(w) -%}
+{% if w.status == "done" %}<span class="badge is-done">{{ icon("check") }}{{ w.status_text }}</span>
+{% elif w.status == "skipped" %}<span class="badge">{{ icon("skip") }}{{ w.status_text }}</span>
+{% elif w.status == "missed" %}<span class="badge is-missed">{{ w.status_text }}</span>
+{% elif w.status == "planned" %}<span class="badge is-planned">{{ L.t("today") }}</span>
+{% elif w.status == "moved" %}<span class="badge">{{ w.status_text }}</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro run_list(rows) -%}
+<ul class="runs">
+  {% for r in rows %}
+  <li>
+    {% call link(url("run", id=r.id), "row") %}
+      <span class="cal" aria-hidden="true"><span class="d">{{ r.day }}</span><span class="m">{{ r.month }}</span></span>
+      <span class="what">
+        <span class="name">{{ r.name }}</span><span class="sr-only">{{ r.date_text }}</span>
+        <span class="facts"><span class="when">{{ r.weekday }} {{ r.start }}</span><span>{{ r.pace }} /km</span>{% if r.hr != "–" %}<span>{{ r.hr }} {{ L.t("unit_bpm") }}</span>{% endif %}{% if r.ascent != "–" %}<span>+{{ r.ascent }} m</span>{% endif %}</span>
+      </span>
+      <span class="km">{{ r.km }}<span class="u">km</span></span>
+      {{ icon("chevron", "chev") }}
+    {% endcall %}
+  </li>
+  {% endfor %}
+</ul>
+{%- endmacro %}

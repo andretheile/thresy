@@ -32,11 +32,31 @@ through an unofficial community library, which can stop working at any time.
   instance) and hands them over as GPX files with a map picture, reads GPX files you send it, and
   says how much of a route you have run before (computed from your data, locally). You import
   the files into komoot or Garmin Connect yourself ([docs/routes.md](docs/routes.md)).
+- **Dashboard** (optional): a private web page with last night, today's session, the week's
+  plan next to what was run, runs, trends and races, behind a login ([docs/web.md](docs/web.md)).
 - Everything runs as one Docker Compose stack with no published ports.
 
 The design, database contract and rules for contributors are in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); [AGENTS.md](AGENTS.md) is the short guide for
 coding agents working on this repository.
+
+## The dashboard
+
+Besides the chat, Thresy can show your running in a browser: last night's sleep and HRV
+against your usual range, today's session and what the coach said this morning, the week's
+plan next to what you ran, every run with its splits and the shape of its track, trends over
+weeks and years, races and segments. It reads the database with a read-only role, sits behind a
+password, and is published by your own reverse proxy ([docs/web.md](docs/web.md)). Light and
+dark, English and German, made for a phone first.
+
+<p>
+  <img src="docs/images/web-phone.png" alt="The dashboard on a phone: last night with sleep stages, HRV and resting heart rate" width="260">
+  <img src="docs/images/web-desktop.png" alt="The dashboard on a laptop: last night, today's session with the morning briefing, the next race, this week and the weekly volume" width="540">
+</p>
+
+The screenshots show the built-in demo athlete, which is invented. Try it without a database:
+`uv run coach web run --demo` (then open <http://127.0.0.1:8080>), or
+`uv run coach web demo --out demo.html --single-file` for one self-contained HTML file.
 
 ## Which agents it works with
 
@@ -142,7 +162,8 @@ packages; it never reaches Garmin, Telegram or a model provider.
 [docs/deploy.md](docs/deploy.md) walks through a first deployment step by step. In short:
 `compose.yml` runs Postgres, a one-shot migration and three services from one application
 image: `sync` (`coach sync poll`), `bridge` (`coach bridge run`) and `backup`
-(`coach backup schedule`). Compose only uses `.env` to fill in `compose.yml`; each service
+(`coach backup schedule`), plus the optional dashboard `web` (`coach web run`, Compose profile
+`web`, published by your reverse proxy). Compose only uses `.env` to fill in `compose.yml`; each service
 receives just the variables and volumes it needs (Garmin credentials only in `sync`, the Telegram
 token only in `bridge`, the backup key only in `backup`). Inside `bridge` the agent CLI runs as a
 separate Unix user whose model credential is in a file only that user can read; `coach runner

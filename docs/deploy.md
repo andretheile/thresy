@@ -11,6 +11,7 @@ Telegram, the model provider, optionally a backup bucket).
 | `sync` | polls Garmin, stores data, raises events | Garmin login and session, FIT files (read/write) |
 | `bridge` | Telegram chat, starts the coding agent | Telegram token, the coach workspace, the agent's home, FIT files (read-only) |
 | `backup` | scheduled backup (nightly, or on chosen weekdays) | the backup key, read-only FIT files and workspace |
+| `web` (optional) | the dashboard in a browser, behind a login, published by your reverse proxy | the read-only database URL and its own password hash and session secret |
 
 Inside `bridge` the coding agent runs as its own Unix user (`agent`), not as the bridge's
 (`coach`): it cannot read the bridge's environment or files, and its model credential lives in a
@@ -23,8 +24,9 @@ otherwise. Placeholders look like `<this>`.
   (`docker compose version` 2.20 or newer), and `git` and `openssl`. You need a user that may run
   `docker` (member of the `docker` group, or `sudo`).
 - Memory: the services' limits add up to about 2.7 GB (db 512 MB, sync 384 MB, bridge 1.5 GB,
-  backup 256 MB); in normal use they need much less. Change the limits in `.env`
-  (`DB_MEM_LIMIT`, `SYNC_MEM_LIMIT`, `BRIDGE_MEM_LIMIT`, `BACKUP_MEM_LIMIT`).
+  backup 256 MB), plus 256 MB for the optional dashboard; in normal use they need much less.
+  Change the limits in `.env` (`DB_MEM_LIMIT`, `SYNC_MEM_LIMIT`, `BRIDGE_MEM_LIMIT`,
+  `BACKUP_MEM_LIMIT`, `WEB_MEM_LIMIT`).
 - Disk: about 3 GB for building the image (roughly 1 GB remains), plus the data: the database
   grows by about 0.5 MB per hour of recorded activity, FIT files take their own size.
 - Accounts: Garmin Connect; Telegram; a subscription or API key for the coding agent (Claude Code
@@ -303,7 +305,44 @@ docker compose exec backup coach backup run --restore-check
 docker compose exec backup coach backup status
 ```
 
-## 14. Verify
+## 14. The web dashboard (optional)
+
+The `web` service shows the athlete's data in a browser, behind a login (docs/web.md). It needs
+a reverse proxy that terminates TLS for a host name of yours; Thresy publishes no port itself.
+With Traefik already running on the server:
+
+```sh
+docker compose run --rm --no-deps web coach web password   # prints a password (once) and its hash
+openssl rand -hex 32                                         # the session secret
+```
+
+Keep the password in your password manager. Put the rest into `.env`:
+
+```sh
+COMPOSE_PROFILES=web
+COMPOSE_FILE=compose.yml:compose.traefik.example.yml
+COACH_WEB_PASSWORD_HASH=scrypt:ln=15,r=8,p=1:...           # the line printed above
+COACH_WEB_SECRET=<the 64 hex characters>
+COACH_WEB_CLIENT_IP_HEADER=X-Forwarded-For
+WEB_HOST=<host name>                                        # with a DNS record pointing here
+TRAEFIK_NETWORK=<the Docker network Traefik watches>
+# TRAEFIK_ENTRYPOINT=websecure  TRAEFIK_CERTRESOLVER=letsencrypt  (the defaults)
+```
+
+`COMPOSE_PROFILES` and `COMPOSE_FILE` make every later `docker compose` command include the
+dashboard and the Traefik labels. Then:
+
+```sh
+docker compose config --quiet && docker compose up -d web
+docker compose ps web                         # healthy after a few seconds
+curl -sI https://<host name>/ | head -1       # HTTP/2 303 (to the login page)
+```
+
+Open the host name on your phone and sign in. Behind a CDN, or with another proxy, see
+docs/web.md, "Behind a reverse proxy and a CDN", before setting `COACH_WEB_CLIENT_IP_HEADER`.
+To sign every device out, change `COACH_WEB_SECRET` and run `docker compose up -d web`.
+
+## 15. Verify
 
 ```sh
 docker compose exec bridge coach runner check --isolation
@@ -329,7 +368,7 @@ docker stats --no-stream                           # memory use against the limi
 
 and in Telegram send `/status` (sync, agent, outbox), then an ordinary message.
 
-## 15. Upgrading
+## 16. Upgrading
 
 ```sh
 git fetch
@@ -361,15 +400,15 @@ read the old one: in Telegram, BotFather, `/mybots`, the bot, "API Token", "Revo
 token"; put the new token into `COACH_TELEGRAM_TOKEN` in `.env` and
 `docker compose up -d bridge`. Copies of the log made elsewhere (a log collector, a saved
 `docker logs` output) have to be deleted separately. What the logs keep out now, and how: step
-18.
+19.
 
-## 16. Restoring
+## 17. Restoring
 
 docs/backup.md, "Restoring after a loss", restores the database, the FIT files and the memory
 files on a new server; "Testing a restore" shows how to check a backup without touching the
 running system.
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 Look first at `docker compose ps -a` and `docker compose logs --tail 100 <service>`.
 
@@ -396,7 +435,7 @@ Look first at `docker compose ps -a` and `docker compose logs --tail 100 <servic
 | Times in messages are off by hours | `COACH_TZ` is not the athlete's time zone. |
 | Disk filling up | `docker system df`; the `db-data` volume, old images (`docker image prune`), and the build cache (`docker builder prune`). Logs are capped at 30 MB per container. |
 
-## 18. Logs and secrets
+## 19. Logs and secrets
 
 Every service logs to its container's output (`docker compose logs <service>`, capped at 30 MB
 per container), at INFO; one-off commands take `-v` for DEBUG. Anyone who can run

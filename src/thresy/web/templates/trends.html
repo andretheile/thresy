@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ L.t("trends") }}</h1></div>
+
+<div class="grid">
+  <section class="panel" aria-labelledby="h-vol">
+    <div class="panel-head">
+      <h2 id="h-vol">{{ L.t("weekly_volume") }}</h2>
+      <span class="panel-sub">{{ L.t("weekly_volume_sub", n=volume.weeks_shown) }}</span>
+    </div>
+    {% if volume.has_data %}
+    <div class="figures">
+      {% if volume.avg4 %}
+      <div class="figure"><div class="big-num">{{ volume.avg4 }}<span class="u">km</span></div><div class="note">{{ L.t("avg_4w_short") }}</div></div>
+      {% else %}
+      <div class="figure"><div class="big-num">{{ volume.runs }}</div><div class="note">{{ L.t("weekly_volume_sub", n=volume.weeks_shown) }}</div></div>
+      {% endif %}
+      <div class="figure"><div class="big-num">{{ volume.this_week }}<span class="u">km</span></div><div class="note">{{ L.t("this_week_so_far") }}</div></div>
+    </div>
+    {{ volume.chart }}
+    <ul class="legend" aria-hidden="true">
+      <li><i class="sw sw-accent"></i>{{ L.t("legend_long") }}</li>
+      <li><i class="sw sw-accent-soft"></i>{{ L.t("legend_other") }}</li>
+    </ul>
+    <details class="table-view">
+      <summary>{{ L.t("table_view") }}</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="l">{{ L.t("col_week") }}</th><th class="l">{{ L.t("col_date") }}</th><th>{{ L.t("col_runs") }}</th><th>km</th><th>{{ L.t("col_long") }}</th></tr></thead>
+        <tbody>{% for w in volume.table %}<tr><td class="l">{{ w.week }}</td><td class="l">{{ w.from }}</td><td>{{ w.runs }}</td><td>{{ w.km }}</td><td>{{ w.long }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </details>
+    {% else %}
+    <p class="empty">{{ L.t("trends_empty") }}</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="h-ytd">
+    <div class="panel-head">
+      <h2 id="h-ytd">{{ L.t("year_so_far") }} {{ ytd.year }}</h2>
+      <span class="panel-sub">{{ L.t("year_chart_sub") }}</span>
+    </div>
+    <div>
+      <div class="hero-num">{{ ytd.km }}<span class="u">km</span></div>
+      <p class="meta"><span>{{ ytd.runs }}</span><span>{{ ytd.delta }}</span></p>
+    </div>
+    {% if ytd.chart %}
+    {{ ytd.chart }}
+    <details class="table-view">
+      <summary>{{ L.t("table_view") }}</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="l">{{ L.t("col_year") }}</th><th>{{ ytd.same_day_head }}</th><th>{{ L.t("col_full_year") }}</th></tr></thead>
+        <tbody>{% for y in ytd.table %}<tr><td class="l">{{ y.year }}</td><td>{{ y.same_day }} km</td><td>{{ y.km }}{% if y.km != "–" %} km{% endif %}</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </details>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="h-rec">
+    <div class="panel-head">
+      <h2 id="h-rec">{{ L.t("recovery") }}</h2>
+      <span class="panel-sub">{{ recovery.sub }}</span>
+    </div>
+    {% if recovery.has_data %}
+    <div>
+      <div class="chart-title"><h3>{{ L.t("hrv_long") }}</h3><span class="now">{{ L.t("avg7") }} <b>{{ recovery.hrv_now }}</b> ms</span></div>
+      {{ recovery.hrv }}
+      <ul class="legend" aria-hidden="true">
+        <li><i class="sw sw-band"></i>{{ L.t("usual_range") }}</li>
+        <li><i class="sw sw-line rest"></i>{{ L.t("avg7") }}</li>
+        <li>{{ recovery.hrv_below }}</li>
+      </ul>
+      <p class="chart-note">{{ L.t("hrv_range_note") }}</p>
+    </div>
+    <div>
+      <div class="chart-title"><h3>{{ L.t("resting_hr_long") }}</h3><span class="now">{{ L.t("avg7") }} <b>{{ recovery.rhr_now }}</b> {{ L.t("unit_bpm") }}</span></div>
+      {{ recovery.rhr }}
+      <p class="chart-note">{{ L.t("rhr_range_note") }}</p>
+    </div>
+    <div>
+      <div class="chart-title"><h3>{{ L.t("sleep") }}</h3><span class="now">{{ L.t("avg7") }} <b>{{ recovery.sleep_now }}</b></span></div>
+      {{ recovery.sleep }}
+    </div>
+    <details class="table-view">
+      <summary>{{ L.t("table_view") }}</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="l">{{ L.t("col_date") }}</th><th>HRV</th><th>{{ L.t("col_range") }}</th><th>{{ L.t("resting_hr") }}</th><th>{{ L.t("sleep") }}</th></tr></thead>
+        <tbody>{% for d in recovery.table %}<tr><td class="l">{{ d.date }}</td><td>{{ d.hrv }}</td><td class="dim">{{ d.range }}</td><td>{{ d.rhr }}</td><td>{{ d.sleep }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </details>
+    {% else %}
+    <p class="empty">{{ L.t("trends_empty") }}</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

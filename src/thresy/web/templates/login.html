@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ L.t("login_title") }}{% endblock %}
+{% block body_class %}login-body{% endblock %}
+{% block shell %}
+<main class="login" aria-labelledby="h-login">
+  {{ m.brand() }}
+  <h1 id="h-login">{{ L.t("login_title") }}</h1>
+  <p class="lead">{{ L.t("login_lead") }}</p>
+  {% if demo %}
+  <p class="msg">{{ L.t("login_demo") }} <a href="{{ url('today') }}">{{ L.t("login_demo_link") }}</a></p>
+  {% else %}
+  <form method="post" action="{{ url('login') }}{% if next_path %}?next={{ next_path|urlencode }}{% endif %}">
+    {% if message %}<p class="msg{% if message_error %} is-error{% endif %}" role="alert">{{ message }}</p>{% endif %}
+    <input type="hidden" name="token" value="{{ form_token }}">
+    <div>
+      <label for="password">{{ L.t("password") }}</label>
+    </div>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus maxlength="1024">
+    <button class="btn" type="submit">{{ L.t("login_submit") }}</button>
+  </form>
+  {% endif %}
+  <div class="threshold-line" aria-hidden="true"></div>
+  <p class="fine">{{ L.t("app_tagline") }}</p>
+</main>
+{% endblock %}

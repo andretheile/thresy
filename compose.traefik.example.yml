@@ -1,0 +1,37 @@
+# Publishing the web dashboard through Traefik: an example override for compose.yml
+# (docs/web.md, "Behind a reverse proxy"). Everything specific comes from .env, so it can be
+# used as it is; copy and adapt it for another set-up. Name both files in .env:
+#
+#   COMPOSE_PROFILES=web
+#   COMPOSE_FILE=compose.yml:compose.traefik.example.yml
+#
+# It attaches the web service to the Docker network Traefik watches and sets the router labels.
+# Everything specific to a deployment comes from .env:
+#
+#   WEB_HOST              the dashboard's host name (a placeholder such as coach.example.org)
+#   TRAEFIK_NETWORK       the external Docker network shared with Traefik
+#   TRAEFIK_ENTRYPOINT    Traefik's HTTPS entry point (default websecure)
+#   TRAEFIK_CERTRESOLVER  the certificate resolver for the host name (default letsencrypt)
+#
+# Traefik terminates TLS and talks to the service over the shared network on port 8080. Thresy
+# still publishes no host port. Tell the service which header carries the client's address
+# (COACH_WEB_CLIENT_IP_HEADER, docs/web.md); with Traefik facing the clients directly that is
+# X-Forwarded-For with COACH_WEB_CLIENT_IP_HOPS=1.
+
+services:
+  web:
+    networks: [backend, proxy]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?set TRAEFIK_NETWORK in .env}
+      traefik.http.routers.thresy-web.rule: "Host(`${WEB_HOST:?set WEB_HOST in .env}`)"
+      traefik.http.routers.thresy-web.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.thresy-web.tls: "true"
+      traefik.http.routers.thresy-web.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.thresy-web.service: thresy-web
+      traefik.http.services.thresy-web.loadbalancer.server.port: "8080"
+
+networks:
+  proxy:
+    name: ${TRAEFIK_NETWORK:?set TRAEFIK_NETWORK in .env}
+    external: true
