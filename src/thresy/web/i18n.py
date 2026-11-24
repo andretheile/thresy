@@ -181,9 +181,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "positive_split": "The second half was {diff} slower.",
         "even_split": "Even halves.",
         "drift": "Heart-rate drift",
-        "drift_text": "{bpm} bpm drift, {pct} % decoupling",
-        "drift_good": "Pace held without the heart rate creeping up.",
-        "drift_high": "The heart rate crept up at the same pace.",
+        "drift_text": (
+            "after the first 10 minutes, {pace_first} → {pace_second} /km at"
+            " {hr_first} → {hr_second} bpm, decoupling {pct} %"
+        ),
+        "drift_good": "Pace held at a decoupling under 5 %: aerobically steady.",
+        "drift_high": "Pace held, but the heart rate rose: a decoupling of 5 % or more.",
+        "drift_slower": "The second half was slower, so the drift says little about this run.",
         "drift_faster": "The second half was faster, so the drift says little about this run.",
         "climbs": "Climbs",
         "reps": "Reps",
@@ -479,9 +483,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "positive_split": "Die zweite Hälfte war {diff} langsamer.",
         "even_split": "Gleichmäßige Hälften.",
         "drift": "Pulsdrift",
-        "drift_text": "{bpm} S/min Drift, {pct} % Entkopplung",
-        "drift_good": "Pace gehalten, ohne dass der Puls stieg.",
-        "drift_high": "Bei gleicher Pace stieg der Puls.",
+        "drift_text": (
+            "nach den ersten 10 Minuten {pace_first} → {pace_second} /km bei"
+            " {hr_first} → {hr_second} S/min, Entkopplung {pct} %"
+        ),
+        "drift_good": "Pace gehalten bei einer Entkopplung unter 5 %: aerob stabil.",
+        "drift_high": "Pace gehalten, aber der Puls stieg: Entkopplung 5 % oder mehr.",
+        "drift_slower": "Die zweite Hälfte war langsamer, daher sagt die Drift hier wenig.",
         "drift_faster": "Die zweite Hälfte war schneller, daher sagt die Drift hier wenig.",
         "climbs": "Anstiege",
         "reps": "Wiederholungen",

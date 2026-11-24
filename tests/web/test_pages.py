@@ -342,10 +342,63 @@ def test_no_difference_without_a_unit() -> None:
     for code, texts in TEXTS.items():
         for key, value in texts.items():
             for name in re.findall(r"\{(\w+)\}\s*/km", value):
-                assert name == "pace", (code, key)
+                assert name.startswith("pace"), (code, key)
     assert EN.pace_delta(7.2) == "7 s/km" and DE.pace_delta(-65) == "1:05 min/km"
     assert EN.signed_seconds(-7) == "−7 s" and EN.signed_seconds(0.3) == "±0 s"
     assert EN.signed_seconds(75) == "+1:15 min"
+
+
+def drift(pace1: float, pace2: float, hr1: float, hr2: float, pct: float) -> dict[str, Any]:
+    return {
+        "first": {"pace_s_per_km": pace1, "hr": hr1},
+        "second": {"pace_s_per_km": pace2, "hr": hr2},
+        "drift_bpm": hr2 - hr1,
+        "decoupling_pct": pct,
+    }
+
+
+@pytest.mark.parametrize(
+    ("numbers", "verdict"),
+    [
+        # the case seen on real data: 7 s/km slower, 6 beats lower, 3.3 % decoupling
+        (drift(300, 307, 160, 154, 3.3), "drift_slower"),
+        (drift(300, 302.5, 150, 152, 3.0), "drift_good"),  # within the tolerance
+        (drift(300, 301, 150, 160, 7.2), "drift_high"),
+        (drift(300, 290, 150, 158, -1.0), "drift_faster"),
+        (drift(300, 296, 150, 150, -4.0), "drift_faster"),
+    ],
+)
+def test_drift_verdict_follows_the_numbers(numbers: dict[str, Any], verdict: str) -> None:
+    assert pages.drift_verdict(numbers) == verdict
+
+
+@pytest.mark.parametrize("lang", [EN, DE], ids=["en", "de"])
+def test_no_verdict_across_reps(lang: Lang) -> None:
+    source = DemoSource("full", lang.code)
+    monday = source.today() - timedelta(days=source.today().weekday())
+    blocks = next(
+        a for a in source.runs(since=monday) if source.planned_for(a.id)[0]["kind"] == "threshold"
+    )
+    ctx = pages.run_page(source, lang, blocks.id)
+    assert ctx["reps"]["rows"]  # reps detected
+    assert ctx["halves"] and ctx["halves_text"] is None
+    assert ctx["drift"]["verdict"] is None and "→" in ctx["drift"]["text"]
+    html = Renderer(lang).render("run.html", ctx)
+    for key in ("drift_good", "drift_high", "drift_faster", "drift_slower", "even_split"):
+        assert esc(lang.t(key)) not in html
+    # a steady run without reps keeps its verdict, and it matches its numbers
+    easy = next(
+        a
+        for a in source.runs()
+        if a.has_records
+        and "strides" not in (a.name or "")
+        and source.planned_for(a.id)
+        and source.planned_for(a.id)[0]["kind"] == "easy"
+    )
+    ctx = pages.run_page(source, lang, easy.id)
+    assert "reps" not in ctx
+    if "drift" in ctx:
+        assert ctx["drift"]["verdict"] is not None
 
 
 @pytest.mark.parametrize("lang", [EN, DE], ids=["en", "de"])

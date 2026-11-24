@@ -48,10 +48,10 @@
     </ul>
   </section>
   {% endif %}
-  {% if halves_text or drift %}
+  {% if halves or drift %}
   <section class="panel insights" aria-label="{{ L.t('halves') }}">
-    {% if halves_text %}<div class="insight"><span class="ic">{{ m.icon("split") }}</span><p><b>{{ L.t("halves") }}:</b> {{ halves[0].pace }} → {{ halves[1].pace }} /km. {{ halves_text }}</p></div>{% endif %}
-    {% if drift %}<div class="insight"><span class="ic{% if drift.good %} good{% endif %}">{{ m.icon("heart") }}</span><p><b>{{ L.t("drift") }}:</b> {{ drift.text }}. {{ drift.verdict }}</p></div>{% endif %}
+    {% if halves %}<div class="insight"><span class="ic">{{ m.icon("split") }}</span><p><b>{{ L.t("halves") }}:</b> {{ halves[0].pace }} → {{ halves[1].pace }} /km.{% if halves_text %} {{ halves_text }}{% endif %}</p></div>{% endif %}
+    {% if drift %}<div class="insight"><span class="ic{% if drift.good %} good{% endif %}">{{ m.icon("heart") }}</span><p><b>{{ L.t("drift") }}:</b> {{ drift.text }}.{% if drift.verdict %} {{ drift.verdict }}{% endif %}</p></div>{% endif %}
   </section>
   {% endif %}
   </div>

@@ -562,6 +562,29 @@ def halves_sentence(lang: Lang, halves: dict[str, Any]) -> str:
     return lang.t("even_split")
 
 
+PACE_HELD_S_PER_KM = 3.0
+"""Two halves within this much of each other count as the same pace."""
+DECOUPLING_LIMIT_PCT = 5.0
+"""Below this the heart rate kept pace with the speed (docs/analysis.md)."""
+
+
+def drift_verdict(drift: dict[str, Any]) -> str | None:
+    """The text key for ``activity.hr_drift``, following from the numbers the page shows
+    (pace and heart rate of both halves, decoupling): "pace held" only when the paces are
+    within :data:`PACE_HELD_S_PER_KM`; a clearly faster or slower second half makes the
+    drift say little."""
+    first, second = drift.get("first") or {}, drift.get("second") or {}
+    pct = drift.get("decoupling_pct")
+    p1, p2 = first.get("pace_s_per_km"), second.get("pace_s_per_km")
+    if pct is None or p1 is None or p2 is None:
+        return None
+    if p2 - p1 < -PACE_HELD_S_PER_KM:
+        return "drift_faster"
+    if p2 - p1 > PACE_HELD_S_PER_KM:
+        return "drift_slower"
+    return "drift_good" if pct < DECOUPLING_LIMIT_PCT else "drift_high"
+
+
 def _downsample(df: pd.DataFrame, n: int = 240) -> pd.DataFrame:
     """Mean of each of ``n`` equal distance bins (moving samples only for the pace)."""
     if df.empty or df["dist"].iloc[-1] <= 0:
@@ -789,40 +812,6 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
         for s, d in zip(splits, deltas, strict=True)
     ]
     out["avg_pace"] = lang.pace(avg)
-    halves = summary.get("halves")
-    if halves and halves.get("pace_diff_s_per_km") is not None:
-        out["halves_text"] = halves_sentence(lang, halves)
-        out["halves"] = [
-            {
-                "pace": lang.pace(halves[h]["pace_s_per_km"]),
-                "hr": lang.int(halves[h]["avg_hr"]) if halves[h]["avg_hr"] else "–",
-            }
-            for h in ("first", "second")
-        ]
-    drift = summary.get("drift") or {}
-    if drift.get("decoupling_pct") is not None:
-        pct = drift["decoupling_pct"]
-        # below about 5 % the pace was held without the heart rate creeping up
-        # (docs/analysis.md); a clearly faster second half makes the number meaningless
-        verdict = "drift_faster" if pct <= -5 else "drift_good" if pct < 5 else "drift_high"
-        out["drift"] = {
-            "text": lang.t(
-                "drift_text", bpm=lang.signed(drift["drift_bpm"], 0), pct=lang.num(pct, 1)
-            ),
-            "verdict": lang.t(verdict),
-            "good": verdict == "drift_good",
-        }
-    out["climbs"] = [
-        {
-            "km": f"{lang.num(c['start_km'], 1)}–{lang.num(c['end_km'], 1)}",
-            "gain": f"+{lang.int(c['gain_m'])} m",
-            "grade": f"{lang.num(c['grade_pct'], 1)} %",
-            "time": lang.clock(c["time_s"]),
-            "pace": lang.pace(c["pace_s_per_km"]),
-            "hr": lang.int(c["avg_hr"]) if c.get("avg_hr") else "–",
-        }
-        for c in summary.get("climbs") or []
-    ]
     # reps of a structured session
     try:
         laps = source.laps(activity_id, df["ts"].iloc[0] if "ts" in df else None)
@@ -830,7 +819,8 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
     except Exception:  # detection is best effort; the page works without it
         iv = {"reps": []}
     reps = iv.get("reps") or []
-    if len(reps) >= 2:
+    has_reps = len(reps) >= 2
+    if has_reps:
         s = iv.get("summary") or {}
         out["reps"] = {
             "summary": lang.t("reps_summary", n=len(reps), pace=lang.pace(s.get("pace_s_per_km"))),
@@ -845,6 +835,44 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
                 for r in reps
             ],
         }
+    # Halves and drift across reps and breaks say little: with reps, the numbers only.
+    halves = summary.get("halves")
+    if halves and halves.get("pace_diff_s_per_km") is not None:
+        out["halves_text"] = None if has_reps else halves_sentence(lang, halves)
+        out["halves"] = [
+            {
+                "pace": lang.pace(halves[h]["pace_s_per_km"]),
+                "hr": lang.int(halves[h]["avg_hr"]) if halves[h]["avg_hr"] else "–",
+            }
+            for h in ("first", "second")
+        ]
+    drift = summary.get("drift") or {}
+    if drift.get("decoupling_pct") is not None:
+        verdict = None if has_reps else drift_verdict(drift)
+        first, second = drift["first"], drift["second"]
+        out["drift"] = {
+            "text": lang.t(
+                "drift_text",
+                pace_first=lang.pace(first["pace_s_per_km"]),
+                pace_second=lang.pace(second["pace_s_per_km"]),
+                hr_first=lang.int(first["hr"]),
+                hr_second=lang.int(second["hr"]),
+                pct=lang.num(drift["decoupling_pct"], 1),
+            ),
+            "verdict": lang.t(verdict) if verdict else None,
+            "good": verdict == "drift_good",
+        }
+    out["climbs"] = [
+        {
+            "km": f"{lang.num(c['start_km'], 1)}–{lang.num(c['end_km'], 1)}",
+            "gain": f"+{lang.int(c['gain_m'])} m",
+            "grade": f"{lang.num(c['grade_pct'], 1)} %",
+            "time": lang.clock(c["time_s"]),
+            "pace": lang.pace(c["pace_s_per_km"]),
+            "hr": lang.int(c["avg_hr"]) if c.get("avg_hr") else "–",
+        }
+        for c in summary.get("climbs") or []
+    ]
     return out
 
 
