@@ -13,7 +13,7 @@ from markupsafe import escape
 from typer.testing import CliRunner
 
 from thresy.cli import get_app
-from thresy.web import charts, pages
+from thresy.web import charts, pages, text
 from thresy.web.demo import DEMO_NOW, DemoSource, build
 from thresy.web.export import export_pages, single_page
 from thresy.web.i18n import TEXTS, Lang
@@ -141,19 +141,93 @@ def test_trouble_is_shown_calmly_and_honestly() -> None:
     assert pages.overview_page(DemoSource("full", "en"), EN, coach_name="T")["sync"]["ok"]
 
 
-def test_shorten_keeps_words_and_drops_markdown() -> None:
-    short, more = pages.shorten("**Today:** easy " + "word " * 100, limit=40)
-    assert more and short.endswith("…") and "**" not in short
-    assert pages.shorten("short", limit=40) == ("short", False)
+def test_excerpt_keeps_words_and_drops_markdown() -> None:
+    short, more = text.excerpt(
+        "**Today:** easy `5 km`, [details](https://x.org) " + "word " * 100, 40
+    )
+    assert more and short.endswith("…")
+    assert not any(mark in short for mark in ("**", "`", "[", "]("))
+    assert short.startswith("Today: easy 5 km, details")
+    assert text.excerpt("short", 40) == ("short", False)
+
+
+DEBRIEF_WITH_TABLE = """Nice and **easy** yesterday. The blocks were clean:
+
+| Block | Pace | HR |
+|---|---:|---:|
+| 1 | 3:56 | 164 |
+| 2 | 3:58 | 166 |
+
+Sunday is the key session."""
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (DEBRIEF_WITH_TABLE, "Nice and easy yesterday. The blocks were clean…"),
+        ("Two things:\n\n- sleep\n- eat\n\nThat is all.", "Two things…"),
+        ("Look:\n\n```\ncode\n```", "Look…"),
+        ("Intro.\n\n> a quote", "Intro."),
+        ("| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter the table.", "After the table."),
+        ("- only\n- a list", "only · a list"),
+    ],
+)
+def test_excerpt_is_prose_only(source: str, expected: str) -> None:
+    short, more = text.excerpt(source)
+    assert short == expected
+    assert more
+    assert "|" not in short
+
+
+def test_tables_are_rendered_without_inline_styles() -> None:
+    html = text.render_markdown(DEBRIEF_WITH_TABLE)
+    assert '<div class="md-table"><table>' in html
+    assert '<th class="al-right">Pace</th>' in html
+    assert "<td>1</td>" in html and "style=" not in html
+    assert "<strong>easy</strong>" in html
 
 
 def test_markdown_is_safe() -> None:
-    html = pages.render_markdown(
+    html = text.render_markdown(
         "<script>alert(1)</script> [x](https://example.org) ![i](https://example.org/i.png)"
+        " [y](javascript:alert(1))"
     )
     assert "<script>" not in html
     assert 'rel="noopener noreferrer nofollow"' in html
     assert "<img" not in html
+    assert "javascript:" not in html.replace("[y](javascript:alert(1))", "")
+
+
+def test_a_debrief_with_a_table_is_shortened_to_prose() -> None:
+    source = DemoSource("trouble", "en")
+    assert "| Block |" in source.coach_message()["text"]
+    ctx = pages.overview_page(source, EN, coach_name="Thresy")
+    assert ctx["coach"]["more"] and "|" not in ctx["coach"]["short"]
+    html = Renderer(EN).render("overview.html", ctx)
+    assert '<details class="expand quote">' in html
+    assert '<div class="md-table"><table>' in html
+    assert not re.search(r"\sstyle=", html)
+
+
+def test_long_plan_descriptions_open_on_request() -> None:
+    source = DemoSource("full", "en")
+    ctx = pages.overview_page(source, EN, coach_name="Thresy")
+    session = ctx["today_plan"][0]
+    assert len(session["description"]) > 800
+    assert session["desc_more"] and len(session["desc_short"]) <= pages.DESCRIPTION_CHARS + 1
+    html = Renderer(EN).render("overview.html", ctx)
+    assert '<details class="expand desc">' in html
+    # on the page of the run that fulfilled a session with a long description
+    monday = source.today() - timedelta(days=source.today().weekday())
+    run = next(
+        a for a in source.runs(since=monday) if source.planned_for(a.id)[0]["kind"] == "threshold"
+    )
+    run_ctx = pages.run_page(source, EN, run.id)
+    assert run_ctx["plan"][0]["desc_more"]
+    assert '<details class="expand desc">' in Renderer(EN).render("run.html", run_ctx)
+    # short ones stay as they are
+    short = next(w for w in source.data.workouts if len(w["description"]) < 100)
+    assert not pages._workout(short, EN, source.today())["desc_more"]
 
 
 class StateSource(DemoSource):

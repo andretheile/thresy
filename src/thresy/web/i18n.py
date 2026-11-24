@@ -107,6 +107,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "msg_post_run": "Run debrief",
         "msg_other": "Message",
         "read_all": "Read all",
+        "read_more": "More",
+        "show_less": "Less",
         "coach_none": (
             "No briefing yet. The coach's latest morning briefing or run debrief appears here."
         ),
@@ -405,6 +407,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "msg_post_run": "Laufbesprechung",
         "msg_other": "Nachricht",
         "read_all": "Alles lesen",
+        "read_more": "Mehr",
+        "show_less": "Weniger",
         "coach_none": (
             "Noch kein Briefing. Hier steht das letzte Morgenbriefing oder die letzte "
             "Laufbesprechung."

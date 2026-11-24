@@ -702,6 +702,10 @@ def _build_plan(data: DemoData, schedule: list[tuple[date, str, float, int | Non
         if kind == "rest" and day < today:
             status = "done"
         description, hr = texts.get(kind, texts["easy"])
+        this_week = today - timedelta(days=today.weekday()) <= day <= today
+        if this_week and kind in LONG_DESCRIPTIONS[data.lang]:
+            # the coach wrote at length for today's session and for Tuesday's blocks
+            description = LONG_DESCRIPTIONS[data.lang][kind]
         target: dict[str, Any] = {}
         if kind != "rest":
             target["distance_km"] = round(km, 1)
@@ -970,9 +974,113 @@ BRIEFING = {
     ),
 }
 DEBRIEF = {
-    "en": "Nice and easy yesterday: {km} km at {pace}/km with the heart rate where it belongs.",
-    "de": "Schön locker gestern: {km} km bei {pace}/km, der Puls genau da, wo er hingehört.",
+    "en": (
+        "Nice and easy yesterday: {km} km at {pace}/km with the heart rate where it belongs."
+        " And Tuesday's three threshold blocks were clean:\n\n"
+        "| Block | Pace | HR |\n|---|---:|---:|\n{rows}\n\n"
+        "Thursday stays easy, and Sunday's long run with the fast finish is the key session."
+    ),
+    "de": (
+        "Schön locker gestern: {km} km bei {pace}/km, der Puls genau da, wo er hingehört."
+        " Und die drei Schwellenblöcke vom Dienstag waren sauber:\n\n"
+        "| Block | Pace | Puls |\n|---|---:|---:|\n{rows}\n\n"
+        "Der Donnerstag bleibt locker, die wichtigste Einheit ist der lange Lauf am Sonntag"
+        " mit der schnellen Endphase."
+    ),
 }
+LONG_DESCRIPTIONS = {
+    "en": {
+        "easy_strides": (
+            "Easy on the river loop, conversational the whole way: if you cannot talk in full"
+            " sentences, slow down. Keep the heart rate under 145; on the rise after the bridge"
+            " let it drift to 150 at most and walk a few steps if it goes higher. It is meant to"
+            " be mild and windy this morning, so start into the wind and come home with it at"
+            " your back.\n\n"
+            "Afterwards, on the flat stretch by the boathouse, 6 × 20 s strides: smooth and"
+            " quick, about 5K effort, never a sprint, with a full walk back in between (at least"
+            " a minute). Leave the strides out if the calves still feel Tuesday or the path is"
+            " wet and slippery.\n\n"
+            "Wear the light trainers, not the racing shoes: they stay in the cupboard until the"
+            " long run on Sunday. Stop early and walk home if anything twinges; one easy day too"
+            " few costs nothing, a niggle five weeks before the half marathon costs a lot. Eat"
+            " something within half an hour afterwards."
+        ),
+        "threshold": (
+            "2 km warm-up at an easy jog, then three blocks of 10 minutes at threshold with"
+            " 2 minutes of easy jogging between them. The blocks should feel comfortably hard:"
+            " a few words are possible, a conversation is not. Do not chase the pace on the"
+            " rise in the second block; hold the effort and let the pace drop a little. The"
+            " heart rate should settle around 160 to 166 and not climb past 170.\n\n"
+            "If the first block already feels like a race, turn the session into an easy run"
+            " and we move the blocks to Thursday. Cool down with 2 km easy, then stretch calves"
+            " and hips. Everyday trainers; drink before you leave, it will be warm in the"
+            " evening."
+        ),
+    },
+    "de": {
+        "easy_strides": (
+            "Locker auf der Flussrunde, die ganze Zeit im Gesprächstempo: wenn ganze Sätze"
+            " nicht mehr gehen, langsamer. Puls unter 145; am Anstieg nach der Brücke darf er"
+            " bis 150 steigen, darüber ein paar Schritte gehen. Heute Morgen soll es mild und"
+            " windig sein, also gegen den Wind los und mit Rückenwind zurück.\n\n"
+            "Danach auf dem flachen Stück am Bootshaus 6 × 20 s Steigerungen: locker und"
+            " schnell, etwa 5-km-Tempo, nie ein Sprint, dazwischen ganz zurückgehen (mindestens"
+            " eine Minute). Die Steigerungen weglassen, wenn die Waden den Dienstag noch spüren"
+            " oder der Weg nass und rutschig ist.\n\n"
+            "Die leichten Trainingsschuhe, nicht die Wettkampfschuhe: die bleiben bis zum langen"
+            " Lauf am Sonntag im Schrank. Früher aufhören und nach Hause gehen, wenn irgendetwas"
+            " zwickt; ein lockerer Tag zu wenig kostet nichts, eine Zerrung fünf Wochen vor dem"
+            " Halbmarathon viel. Innerhalb einer halben Stunde danach etwas essen."
+        ),
+        "threshold": (
+            "2 km locker einlaufen, dann drei Blöcke à 10 Minuten an der Schwelle mit je"
+            " 2 Minuten lockerem Traben dazwischen. Die Blöcke sollen sich angenehm hart"
+            " anfühlen: ein paar Worte gehen, ein Gespräch nicht. Am Anstieg im zweiten Block"
+            " nicht der Pace hinterherlaufen, sondern die Anstrengung halten und die Pace etwas"
+            " fallen lassen. Der Puls sollte sich bei 160 bis 166 einpendeln und nicht über 170"
+            " steigen.\n\n"
+            "Fühlt sich schon der erste Block wie ein Wettkampf an, wird daraus ein lockerer"
+            " Lauf, und die Blöcke wandern auf Donnerstag. 2 km locker auslaufen, dann Waden und"
+            " Hüfte dehnen. Normale Trainingsschuhe; vor dem Start trinken, abends wird es warm."
+        ),
+    },
+}
+
+
+def _laps_frame(
+    laps: list[dict[str, Any]], activity_id: int, first_ts: pd.Timestamp | None
+) -> pd.DataFrame:
+    """Laps shaped like :func:`thresy.analysis.data.load_laps` returns them."""
+    df = pd.DataFrame(laps)
+    if df.empty:
+        return df
+    df.insert(0, "activity_id", activity_id)
+    for col in df.columns:
+        if col not in ("start_utc", "intensity", "trigger"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["start_utc"] = pd.to_datetime(df["start_utc"], utc=True)
+    if first_ts is not None:
+        df["t_start"] = (df["start_utc"] - pd.Timestamp(first_ts)).dt.total_seconds()
+        nxt = df["t_start"].shift(-1)
+        own = df["t_start"] + df["elapsed_s"].fillna(df["duration_s"])
+        df["t_end"] = nxt.where(nxt.notna(), own)
+    return df
+
+
+def _block_rows(data: DemoData, row: dict[str, Any], lang: str) -> str:
+    """The reps of one structured run as Markdown table rows, as the coach reports them
+    (from the same analysis as the run's page)."""
+    from thresy.analysis import intervals
+    from thresy.analysis.data import RECORD_COLUMNS
+
+    raw, laps = simulate(data.specs[row["id"]])
+    df = prepare(raw.rename(columns=RECORD_COLUMNS))
+    result = intervals.analyze(_activity(row), df, _laps_frame(laps, row["id"], df["ts"].iloc[0]))
+    lines = []
+    for rep in result["reps"]:
+        pace = round(rep["pace_s_per_km"])
+        lines.append(f"| {rep['n']} | {pace // 60}:{pace % 60:02d} | {round(rep['avg_hr'])} |")
+    return "\n".join(lines)
 
 
 def _build_messages(data: DemoData) -> None:
@@ -984,16 +1092,28 @@ def _build_messages(data: DemoData) -> None:
     sleep = f"{minutes // 60} h {minutes % 60:02d} min"
     km_text = f"{km:g}".replace(".", ",") if data.lang == "de" else f"{km:g}"
     yesterday = [a for a in data.activities if a["local_date"] == data.today - timedelta(days=1)]
-    if yesterday:
+    monday = data.today - timedelta(days=data.today.weekday())
+    blocks = next(
+        (
+            a
+            for a in data.activities
+            if monday <= a["local_date"] < data.today
+            and a["id"] in data.specs
+            and data.specs[a["id"]].kind == "threshold"
+        ),
+        None,
+    )
+    if yesterday and blocks is not None:
         a = yesterday[-1]
-        pace = (a["moving_s"] or a["duration_s"]) / (a["distance_m"] / 1000)
+        pace = round((a["moving_s"] or a["duration_s"]) / (a["distance_m"] / 1000))
         dkm = f"{a['distance_m'] / 1000:.1f}"
         data.messages.append(
             {
                 "ts": a["start_utc"] + timedelta(seconds=a["elapsed_s"] + 600),
                 "text": DEBRIEF[data.lang].format(
                     km=dkm.replace(".", ",") if data.lang == "de" else dkm,
-                    pace=f"{int(pace // 60)}:{int(pace % 60):02d}",
+                    pace=f"{pace // 60}:{pace % 60:02d}",
+                    rows=_block_rows(data, blocks, data.lang),
                 ),
                 "trigger": "post_run",
             }
@@ -1412,20 +1532,7 @@ class DemoSource:
 
     def laps(self, activity_id: int, first_ts: pd.Timestamp | None) -> pd.DataFrame:
         _, laps = self.raw_records(activity_id)
-        df = pd.DataFrame(laps)
-        if df.empty:
-            return df
-        df.insert(0, "activity_id", activity_id)
-        for col in df.columns:
-            if col not in ("start_utc", "intensity", "trigger"):
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        df["start_utc"] = pd.to_datetime(df["start_utc"], utc=True)
-        if first_ts is not None:
-            df["t_start"] = (df["start_utc"] - pd.Timestamp(first_ts)).dt.total_seconds()
-            nxt = df["t_start"].shift(-1)
-            own = df["t_start"] + df["elapsed_s"].fillna(df["duration_s"])
-            df["t_end"] = nxt.where(nxt.notna(), own)
-        return df
+        return _laps_frame(laps, activity_id, first_ts)
 
     def daily_distance(self, since: date, until: date) -> list[tuple[date, float]]:
         out: dict[date, float] = {}

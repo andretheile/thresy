@@ -8,17 +8,17 @@ selects, combines and formats them.
 from __future__ import annotations
 
 import math
-import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from markupsafe import Markup
 
 from thresy.analysis.data import Activity, pace_s_per_km
 from thresy.logs import redact
 from thresy.tools.plan import target_text
-from thresy.web import charts
+from thresy.web import charts, text
 from thresy.web.i18n import Lang
 from thresy.web.source import Source, monday_of, parse_utc
 
@@ -151,44 +151,15 @@ def notices(source: Source, lang: Lang) -> list[dict[str, str]]:
     return out
 
 
-def _plain(text: str) -> str:
-    """Markdown as plain text, for the short version of a message."""
-    text = re.sub(r"`{1,3}", "", text)
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)
-    text = re.sub(r"(\*\*|__|\*|_|~~)(.+?)\1", r"\2", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def shorten(text: str, limit: int = 260) -> tuple[str, bool]:
-    plain = _plain(text)
-    if len(plain) <= limit:
-        return plain, False
-    cut = plain[:limit].rsplit(" ", 1)[0].rstrip(",;:–-")
-    return cut + "…", True
-
-
-def render_markdown(text: str) -> str:
-    """The full message as HTML: CommonMark without raw HTML and without images; links open
-    without a referrer."""
-    from markdown_it import MarkdownIt
-
-    md = MarkdownIt("commonmark", {"html": False, "linkify": False}).disable("image")
-
-    def link_open(renderer: Any, tokens: Any, idx: int, options: Any, env: Any) -> str:
-        tokens[idx].attrSet("rel", "noopener noreferrer nofollow")
-        return renderer.renderToken(tokens, idx, options, env)
-
-    md.add_render_rule("link_open", link_open)
-    return md.render(text)
-
-
 # -- overview --------------------------------------------------------------------------------------
 
 
 MIN_WEEKS_SHOWN = 6
 MIN_NIGHTS = 14
 """The recovery trends need at least this many nights in their 12 weeks."""
+DESCRIPTION_CHARS = 180
+"""A planned session's description is shown up to about this length (some three lines on a
+phone); a longer one opens on request."""
 
 
 def trim_weeks(weeks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -328,12 +299,19 @@ def _workout(w: dict[str, Any], lang: Lang, today: date) -> dict[str, Any]:
         bits.append(f"{lang.t('col_hr')} {target['hr']}")
     if target.get("ascent_m") is not None:
         bits.append(f"+{lang.int(float(target['ascent_m']))} m")
+    description = w.get("description") or ""
+    # a description can run to a thousand characters (conditions, pacing, shoes): a few
+    # lines of it, the rest behind a control
+    desc_short, desc_more = text.excerpt(description, DESCRIPTION_CHARS)
     return {
         "id": w["id"],
         "title": w["title"],
         "kind": w.get("kind"),
         "is_rest": w.get("kind") == "rest",
-        "description": w.get("description") or "",
+        "description": description,
+        "desc_short": desc_short,
+        "desc_more": desc_more,
+        "desc_full": Markup(text.render_markdown(description)) if description else "",
         "target": bits,
         "target_text": target_text(target),
         "status": status,
@@ -395,7 +373,7 @@ def _week(source: Source, lang: Lang, today: date) -> dict[str, Any]:
         else lang.t("week_km_noplan", done=lang.num(t["run_km"], 1)),
         "runs": lang.tn("week_runs", t["runs"]),
         "strip": charts.pair(charts.week_strip, PHONE_W, HALF_W, days=days, lang=lang, today=today),
-        "meter": charts.Markup(_meter(t["run_km"], t["planned_km"])) if t["planned_km"] else None,
+        "meter": Markup(_meter(t["run_km"], t["planned_km"])) if t["planned_km"] else None,
     }
 
 
@@ -422,7 +400,7 @@ def _coach(source: Source, lang: Lang, coach_name: str, today: date) -> dict[str
     )
     ts = parse_utc(msg["ts"])
     local = ts.astimezone(source.zone) if ts else None
-    short, more = shorten(msg["text"])
+    short, more = text.excerpt(msg["text"])
     when = ""
     if local is not None:
         when = (
@@ -436,7 +414,7 @@ def _coach(source: Source, lang: Lang, coach_name: str, today: date) -> dict[str
         "when": when,
         "short": short,
         "more": more,
-        "full": charts.Markup(render_markdown(msg["text"])),
+        "full": Markup(text.render_markdown(msg["text"])),
     }
 
 

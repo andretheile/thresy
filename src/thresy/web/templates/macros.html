@@ -58,6 +58,15 @@
 {%- if href %}<a href="{{ href }}"{% if cls %} class="{{ cls }}"{% endif %}>{{ caller() }}</a>{% else %}<span{% if cls %} class="{{ cls }}"{% endif %}>{{ caller() }}</span>{% endif -%}
 {%- endmacro %}
 
+{# A text shortened to an excerpt that opens to the full text, without JavaScript: the
+   summary holds the excerpt and the control; open, the excerpt gives way to the text. #}
+{% macro expandable(short, full, more, less, cls="") -%}
+<details class="expand {{ cls }}">
+  <summary><span class="excerpt">{{ short }}</span> <span class="toggle"><span class="t-more">{{ more }}</span><span class="t-less">{{ less }}</span>{{ icon("down") }}</span></summary>
+  <div class="full md">{{ full }}</div>
+</details>
+{%- endmacro %}
+
 {% macro notice_list(items) -%}
 {% if items %}
 <div class="notices" role="status">

@@ -119,7 +119,10 @@
             {% if w.status != "planned" %}<span class="aside">{{ m.status_badge(w) }}</span>{% endif %}
           </div>
           {% if w.target %}<ul class="target">{% for t in w.target %}<li class="chip">{{ t }}</li>{% endfor %}</ul>{% endif %}
-          {% if w.description %}<p class="desc">{{ w.description }}</p>{% endif %}
+          {% if w.description %}
+          {% if w.desc_more %}{{ m.expandable(w.desc_short, w.desc_full, L.t("read_more"), L.t("show_less"), "desc") }}
+          {% else %}<div class="desc full md">{{ w.desc_full }}</div>{% endif %}
+          {% endif %}
         </div>
         {% endfor %}
       {% elif today_runs %}
@@ -138,13 +141,9 @@
       <div class="coach">
         <p class="who"><b>{{ coach.who }}</b><span>{{ coach.kind }}</span><span>{{ coach.when }}</span></p>
         {% if coach.more %}
-        <p class="quote quote-short">{{ coach.short }}</p>
-        <details>
-          <summary>{{ L.t("read_all") }}{{ m.icon("down") }}</summary>
-          <div class="full">{{ coach.full }}</div>
-        </details>
+        {{ m.expandable(coach.short, coach.full, L.t("read_all"), L.t("show_less"), "quote") }}
         {% else %}
-        <div class="quote full">{{ coach.full }}</div>
+        <div class="quote full md">{{ coach.full }}</div>
         {% endif %}
       </div>
       {% else %}

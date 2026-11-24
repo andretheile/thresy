@@ -25,6 +25,10 @@
       <p><span class="muted">{{ L.t("plan_for_run") }}:</span> <b>{{ w.title }}</b>{% if w.target %} <span class="muted">· {{ w.target|join(" · ") }}</span>{% endif %}</p>
       <span class="aside">{{ m.status_badge(w) }}</span>
     </div>
+    {% if w.description %}
+    {% if w.desc_more %}{{ m.expandable(w.desc_short, w.desc_full, L.t("read_more"), L.t("show_less"), "desc") }}
+    {% else %}<div class="desc full md">{{ w.desc_full }}</div>{% endif %}
+    {% endif %}
     {% if w.note %}<p class="muted small">{{ w.note }}</p>{% endif %}
     {% endfor %}
   </section>
