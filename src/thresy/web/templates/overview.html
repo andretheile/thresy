@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ date_long }}</h1>
+  {% call m.link(url("data"), "sync-pill" ~ ("" if sync.last else " is-off")) %}{{ sync.text }}{% endcall %}
+</div>
+
+{{ m.notice_list(notices) }}
+
+<div class="grid overview">
+  <div class="col">
+    {# -- last night ------------------------------------------------------------------- #}
+    <section class="panel o-1" aria-labelledby="h-night">
+      <div class="panel-head">
+        <h2 id="h-night">{{ L.t("last_night") }}</h2>
+        {% if night.state == "synced" and night.synced_at %}<span class="aside">{{ night.synced_at }}</span>{% endif %}
+      </div>
+      {% if night.state == "synced" %}
+      <div class="night-top">
+        <div>
+          <div class="hero-num" aria-label="{{ night.duration }} {{ L.t('asleep') }}">
+            <span>{{ night.hours }}</span><span class="u">h</span><span>{{ "%02d"|format(night.minutes) }}</span><span class="u">min</span>
+          </div>
+          <p class="meta"><span>{{ L.t("asleep") }}</span><span>{{ night.window }}</span>{% if night.score %}<span>{{ L.t("sleep_score", n=night.score) }}</span>{% endif %}</p>
+        </div>
+      </div>
+      <div>
+        {{ night.stage_bar }}
+        <ul class="legend">
+          {% for s in night.stages %}<li><i class="sw sw-{{ s.key }}"></i>{{ s.name }} <b>{{ s.dur }}</b></li>{% endfor %}
+        </ul>
+      </div>
+      {% if night.hypnogram %}{{ night.hypnogram }}{% endif %}
+      <hr class="rule">
+      <div class="figures">
+        <div class="figure">
+          <div class="label">{{ L.t("hrv") }}</div>
+          <div class="mid-num">{{ night.hrv.value }}<span class="u">ms</span></div>
+          <div class="note {{ 'is-out' if night.hrv.state in ('below', 'above') else 'is-in' }}">{{ night.hrv.text }}</div>
+          {{ night.hrv.strip }}
+          {% if night.hrv.usual %}<div class="note faint">{{ night.hrv.usual }}</div>{% endif %}
+        </div>
+        <div class="figure">
+          <div class="label">{{ L.t("resting_hr") }}</div>
+          <div class="mid-num">{{ night.rhr.value }}<span class="u">{{ L.t("unit_bpm") }}</span></div>
+          <div class="note">{{ night.rhr.delta or "&nbsp;"|safe }}</div>
+          {{ night.rhr.strip }}
+          {% if night.rhr.usual %}<div class="note faint">{{ L.t("usual_short", range=night.rhr.usual) }}</div>{% endif %}
+        </div>
+      </div>
+      {% elif night.state == "pending" %}
+      <div class="pending">
+        <span class="moon">{{ m.icon("moonstar") }}</span>
+        <div>
+          <p class="session-title">{{ L.t("night_pending_title") }}</p>
+          <p class="muted">{{ L.t("night_pending_text") }}</p>
+          <p class="small faint">{{ night.latest }}</p>
+        </div>
+      </div>
+      {% else %}
+      <p class="empty">{{ L.t("night_none") }}</p>
+      {% endif %}
+    </section>
+
+    {# -- this week -------------------------------------------------------------------- #}
+    <section class="panel o-3" aria-labelledby="h-week">
+      <div class="panel-head">
+        <h2 id="h-week">{{ L.t("this_week") }}</h2>
+        <span class="aside">{{ week.runs }}</span>
+      </div>
+      {% if week.has_any %}
+      <div class="week-head">
+        <div class="big-num">{{ week.run_km }}<span class="u">{% if week.has_plan %}/ {{ week.planned_km }} {% endif %}km</span></div>
+      </div>
+      {% if week.meter %}{{ week.meter }}{% endif %}
+      {{ week.strip }}
+      <ul class="legend" aria-hidden="true">
+        {% if week.has_plan %}<li><i class="sw sw-plan"></i>{{ L.t("legend_planned") }}</li>{% endif %}
+        <li><i class="sw sw-accent"></i>{{ L.t("legend_ran") }}</li>
+      </ul>
+      <ul class="days">
+        {% for d in week.days %}
+        {% if d.workouts or d.runs or (d.is_today and week.has_plan) %}
+        <li class="{% if d.is_today %}is-today{% endif %}{% if d.is_past %} is-past{% endif %}">
+          <span class="wd">{{ d.weekday }}</span>
+          <span>
+            {% for w in d.workouts %}<span class="title{% if w.is_rest %} rest{% endif %}">{{ w.title }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+            {% if not d.workouts and d.runs %}<span class="title">{{ d.runs[0].name }}</span>{% endif %}
+            {% if not d.workouts and not d.runs %}<span class="title rest">{{ L.t("today_nothing") }}</span>{% endif %}
+          </span>
+          <span>{% for w in d.workouts %}{{ m.status_badge(w) }}{% endfor %}</span>
+          {% if d.runs or (d.workouts and d.workouts[0].target) %}
+          <span class="sub">
+            {% if d.runs %}{% for r in d.runs %}<span class="ran">{% call m.link(url("run", id=r.id)) %}{{ r.km }} km{% endcall %} · {{ r.pace }} /km</span>{% if not loop.last %} · {% endif %}{% endfor %}
+            {% elif d.workouts[0].target %}{{ d.workouts[0].target|join(" · ") }}{% endif %}
+          </span>
+          {% endif %}
+        </li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">{{ L.t("week_empty") }}</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="col">
+    {# -- today and the coach ------------------------------------------------------------ #}
+    <section class="panel session o-2" aria-labelledby="h-today">
+      <div class="panel-head">
+        <h2 id="h-today">{{ L.t("today") }}</h2>
+      </div>
+      {% if today_plan %}
+        {% for w in today_plan %}
+        <div>
+          <div class="panel-head">
+            <p class="session-title">{{ w.title if not w.is_rest else L.t("rest_day") }}</p>
+            {% if w.status != "planned" %}<span class="aside">{{ m.status_badge(w) }}</span>{% endif %}
+          </div>
+          {% if w.target %}<ul class="target">{% for t in w.target %}<li class="chip">{{ t }}</li>{% endfor %}</ul>{% endif %}
+          {% if w.description %}<p class="desc">{{ w.description }}</p>{% endif %}
+        </div>
+        {% endfor %}
+      {% elif today_runs %}
+        <p class="session-title">{{ L.t("ran_today") }}</p>
+      {% elif has_plan %}
+        <p class="muted">{{ L.t("today_nothing") }}</p>
+      {% else %}
+        <p class="empty">{{ L.t("today_no_plan") }}</p>
+      {% endif %}
+      {% for r in today_runs %}
+        <p class="ran small">{% call m.link(url("run", id=r.id)) %}{{ r.name }}{% endcall %} · {{ r.km }} km · {{ r.pace }} /km</p>
+      {% endfor %}
+
+      <hr class="rule">
+      {% if coach %}
+      <div class="coach">
+        <p class="who"><b>{{ coach.who }}</b><span>{{ coach.kind }}</span><span>{{ coach.when }}</span></p>
+        {% if coach.more %}
+        <p class="quote quote-short">{{ coach.short }}</p>
+        <details>
+          <summary>{{ L.t("read_all") }}{{ m.icon("down") }}</summary>
+          <div class="full">{{ coach.full }}</div>
+        </details>
+        {% else %}
+        <div class="quote full">{{ coach.full }}</div>
+        {% endif %}
+      </div>
+      {% else %}
+      <p class="empty plain">{{ L.t("coach_none") }}</p>
+      {% endif %}
+    </section>
+
+    {# -- next race --------------------------------------------------------------------- #}
+    {% if race %}
+    <section class="panel o-4" aria-labelledby="h-race">
+      <div class="panel-head">
+        <h2 id="h-race">{{ L.t("next_race") }}</h2>
+        {% if race.priority %}<span class="aside"><span class="badge{% if race.priority_key == 'A' %} is-a{% endif %}">{{ race.priority }}</span></span>{% endif %}
+      </div>
+      <div class="race-mini">
+        <div>
+          {% call m.link(url("races")) %}<span class="name">{{ race.name }}</span>{% endcall %}
+          <p class="meta"><span>{{ race.date_text }}</span>{% if race.distance %}<span>{{ race.distance }}</span>{% endif %}{% if race.goal %}<span>{{ L.t("goal") }} {{ race.goal }}</span>{% endif %}</p>
+        </div>
+        <div class="days">{% if race.days == 0 %}<b>{{ L.t("race_today") }}</b>{% else %}<b>{{ race.days }}</b><span>{{ race.days_text }}</span>{% endif %}</div>
+      </div>
+    </section>
+    {% endif %}
+
+    {# -- volume ------------------------------------------------------------------------- #}
+    <section class="panel o-6" aria-labelledby="h-volume">
+      <div class="panel-head">
+        <h2 id="h-volume">{{ L.t("weekly_volume") }}</h2>
+        {% call m.link(url("trends"), "aside more") %}{{ L.t("nav_trends") }}{{ m.icon("chevron") }}{% endcall %}
+      </div>
+      {% if volume.has_data %}
+      {% if volume.avg4 %}<p class="muted">{{ volume.avg4 }}</p>{% endif %}
+      {{ volume.chart }}
+      <ul class="legend" aria-hidden="true">
+        <li><i class="sw sw-accent"></i>{{ L.t("legend_long") }}</li>
+        <li><i class="sw sw-accent-soft"></i>{{ L.t("legend_other") }}</li>
+      </ul>
+      {% else %}
+      <p class="empty">{{ L.t("trends_empty") }}</p>
+      {% endif %}
+    </section>
+
+    {# -- recent runs --------------------------------------------------------------------- #}
+    <section class="panel o-5" aria-labelledby="h-recent">
+      <div class="panel-head">
+        <h2 id="h-recent">{{ L.t("recent_runs") }}</h2>
+        {% if recent %}{% call m.link(url("runs"), "aside more") %}{{ L.t("all_runs") }}{{ m.icon("chevron") }}{% endcall %}{% endif %}
+      </div>
+      {% if recent %}{{ m.run_list(recent) }}{% else %}<p class="empty">{{ L.t("runs_none") }}</p>{% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

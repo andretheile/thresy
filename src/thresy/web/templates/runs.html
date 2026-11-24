@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ title }}</h1>
+    {% if total %}<p class="sub">{{ total }}</p>{% endif %}
+  </div>
+</div>
+{% if years|length > 1 %}
+<nav class="year-tabs" aria-label="{{ L.t('nav_runs') }}">
+  {% for y in years %}
+  {% set href = url("runs", year=y.year) %}
+  {% if href %}<a href="{{ href }}"{% if y.current %} aria-current="page"{% endif %}>{{ y.year }}</a>{% else %}<span>{{ y.year }}</span>{% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+{% if months %}
+<div class="panel">
+  {% for mo in months %}
+  <section class="month" aria-label="{{ mo.name }}">
+    <div class="month-head"><h2>{{ mo.name }}</h2><span>{{ mo.total }}</span></div>
+    {{ m.run_list(mo.runs) }}
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">{{ L.t("runs_none") }}</p>
+{% endif %}
+{% endblock %}

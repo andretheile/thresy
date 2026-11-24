@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block main_class %}narrow{% endblock %}
+{% macro rows(items) -%}
+<dl class="kv">{% for r in items %}<div><dt>{{ r.label }}</dt><dd{% if r.bad %} class="is-bad"{% endif %}>{{ r.value }}{% if r.note %} <span class="note">{{ r.note }}</span>{% endif %}</dd></div>{% endfor %}</dl>
+{%- endmacro %}
+{% block content %}
+<div class="page-head"><h1>{{ L.t("data_title") }}</h1></div>
+{% if all_good %}
+<p class="ok-line">{{ m.icon("check") }}{{ L.t("all_good") }}</p>
+{% else %}
+{{ m.notice_list(notices) }}
+{% endif %}
+<div class="grid section">
+  <section class="panel" aria-labelledby="h-sync">
+    <div class="panel-head"><h2 id="h-sync">{{ L.t("sync") }}</h2></div>
+    {{ rows(sync_rows) }}
+  </section>
+  <section class="panel" aria-labelledby="h-backup">
+    <div class="panel-head"><h2 id="h-backup">{{ L.t("backup") }}</h2></div>
+    {% if backup_rows %}{{ rows(backup_rows) }}{% else %}<p class="muted">{{ L.t("no_backup") }}</p>{% endif %}
+  </section>
+  <section class="panel" aria-labelledby="h-counts">
+    <div class="panel-head"><h2 id="h-counts">{{ L.t("data_counts") }}</h2></div>
+    {{ rows(count_rows) }}
+  </section>
+</div>
+{% endblock %}

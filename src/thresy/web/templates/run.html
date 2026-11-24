@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="run-head">
+  {% call m.link(url("runs", year=year), "back") %}{{ m.icon("back") }}{{ L.t("back_to_runs") }}{% endcall %}
+  <h1>{{ name }}</h1>
+  <p class="meta"><span>{{ date_long }}</span>{% if start %}<span>{{ start }}</span>{% endif %}</p>
+</div>
+
+<div class="run-layout section">
+  <section class="panel span-2" aria-label="{{ L.t('distance') }}">
+    <div class="hero-row">
+      {% for h in hero %}
+      <div><div class="value">{{ h.value }}{% if h.unit %}<span class="u">{{ h.unit }}</span>{% endif %}</div><div class="label">{{ h.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% if stats %}
+    <div class="statline">
+      {% for s in stats %}<div class="stat"><div class="label">{{ s.label }}</div><div class="value">{{ s.value }}{% if s.unit %}<span class="u">{{ s.unit }}</span>{% endif %}</div></div>{% endfor %}
+    </div>
+    {% endif %}
+    {% for w in plan %}
+    <hr class="rule">
+    <div class="panel-head">
+      <p><span class="muted">{{ L.t("plan_for_run") }}:</span> <b>{{ w.title }}</b>{% if w.target %} <span class="muted">· {{ w.target|join(" · ") }}</span>{% endif %}</p>
+      <span class="aside">{{ m.status_badge(w) }}</span>
+    </div>
+    {% if w.note %}<p class="muted small">{{ w.note }}</p>{% endif %}
+    {% endfor %}
+  </section>
+
+  {% if not has_records %}
+  <p class="empty span-2">{{ L.t("no_records") }}</p>
+  {% else %}
+
+  <div class="col">
+  {% if track %}
+  <section class="panel track-box" aria-labelledby="h-track">
+    <div class="panel-head"><h2 id="h-track">{{ L.t("track") }}</h2><span class="aside">{{ L.t("track_note") }}</span></div>
+    {{ track }}
+    <ul class="legend">
+      <li><i class="sw sw-start"></i>{{ L.t("start") }}</li>
+      <li><i class="sw sw-finish"></i>{{ L.t("finish") }}</li>
+    </ul>
+  </section>
+  {% endif %}
+  {% if halves_text or drift %}
+  <section class="panel insights" aria-label="{{ L.t('halves') }}">
+    {% if halves_text %}<div class="insight"><span class="ic">{{ m.icon("split") }}</span><p><b>{{ L.t("halves") }}:</b> {{ halves[0].pace }} → {{ halves[1].pace }} /km. {{ halves_text }}</p></div>{% endif %}
+    {% if drift %}<div class="insight"><span class="ic{% if drift.good %} good{% endif %}">{{ m.icon("heart") }}</span><p><b>{{ L.t("drift") }}:</b> {{ drift.text }}. {{ drift.verdict }}</p></div>{% endif %}
+  </section>
+  {% endif %}
+  </div>
+
+  <section class="panel" aria-labelledby="h-splits">
+    <div class="panel-head">
+      <h2 id="h-splits">{{ L.t("splits") }}</h2>
+      <span class="aside">Ø {{ avg_pace }} /km</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="l">{{ L.t("col_split") }}</th><th>{{ L.t("col_pace") }}</th><th class="split-cell"><span class="sr-only">±</span></th><th>{{ L.t("col_hr") }}</th><th>{{ L.t("col_ascent") }}</th></tr></thead>
+        <tbody>
+          {% for s in splits %}
+          <tr class="{% if s.partial %}partial{% endif %}">
+            <td class="l">{{ s.n }}</td>
+            <td class="{% if s.faster %}fast{% endif %}">{{ s.pace }}</td>
+            <td class="split-cell"><span class="sr-only">{{ s.delta }}</span>{{ s.bar }}</td>
+            <td>{{ s.hr }}</td>
+            <td class="dim">{{ s.ascent }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel span-2 profiles" aria-labelledby="h-profile">
+    <div class="panel-head"><h2 id="h-profile">{{ L.t("profile") }}</h2></div>
+    <div class="readout" data-readout aria-live="off"></div>
+    {% for p in profiles %}
+    <div>
+      <div class="chart-title"><h3>{{ p.title }}</h3><span class="faint small">{{ p.unit }}</span></div>
+      {{ p.chart }}
+    </div>
+    {% endfor %}
+    <script type="application/json" id="profile-data">{{ profile_data|tojson }}</script>
+  </section>
+
+  {% if reps %}
+  <section class="panel span-2" aria-labelledby="h-reps">
+    <div class="panel-head"><h2 id="h-reps">{{ L.t("reps") }}</h2><span class="aside">{{ reps.summary }}</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">{{ L.t("col_rep") }}</th><th>{{ L.t("col_distance") }}</th><th>{{ L.t("col_time") }}</th><th>{{ L.t("col_pace") }}</th><th>{{ L.t("col_hr") }}</th></tr></thead>
+      <tbody>{% for r in reps.rows %}<tr><td class="l">{{ r.n }}</td><td>{{ r.dist }}</td><td>{{ r.time }}</td><td>{{ r.pace }}</td><td>{{ r.hr }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </section>
+  {% endif %}
+
+  {% if climbs %}
+  <section class="panel{% if not efforts %} span-2{% endif %}" aria-labelledby="h-climbs">
+    <div class="panel-head"><h2 id="h-climbs">{{ L.t("climbs") }}</h2></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">km</th><th>{{ L.t("col_ascent") }}</th><th>{{ L.t("col_grade") }}</th><th>{{ L.t("col_time") }}</th><th>{{ L.t("col_hr") }}</th></tr></thead>
+      <tbody>{% for c in climbs %}<tr><td class="l">{{ c.km }}</td><td>{{ c.gain }}</td><td>{{ c.grade }}</td><td>{{ c.time }}</td><td>{{ c.hr }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </section>
+  {% endif %}
+  {% endif %}
+
+  {% if efforts %}
+  <section class="panel{% if not climbs %} span-2{% endif %}" aria-labelledby="h-efforts">
+    <div class="panel-head"><h2 id="h-efforts">{{ L.t("segment_efforts") }}</h2>{% call m.link(url("segments"), "aside more") %}{{ L.t("nav_segments") }}{{ m.icon("chevron") }}{% endcall %}</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">{{ L.t("col_name") }}</th><th>{{ L.t("col_time") }}</th><th>{{ L.t("col_pace") }}</th><th>{{ L.t("col_hr") }}</th></tr></thead>
+      <tbody>{% for e in efforts %}<tr><td class="name">{{ e.name }}</td><td>{{ e.time }}</td><td>{{ e.pace }}</td><td>{{ e.hr }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

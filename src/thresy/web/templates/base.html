@@ -1,0 +1,72 @@
+{%- import "macros.html" as m with context -%}
+<!doctype html>
+<html lang="{{ L.code }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f0f0e" media="(prefers-color-scheme: dark)">
+<title>{% block title %}{{ title }}{% endblock %} · Thresy</title>
+{% if inline -%}
+<link rel="icon" href="{{ inline.favicon }}">
+<style>{{ inline.css }}</style>
+<script>{{ inline.theme_js }}</script>
+{%- else -%}
+<link rel="icon" href="{{ static('favicon.svg') }}" type="image/svg+xml">
+<link rel="stylesheet" href="{{ static('thresy.css') }}">
+<script src="{{ static('theme.js') }}"></script>
+<script defer src="{{ static('thresy.js') }}"></script>
+{%- endif %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{% block shell %}
+{% if demo %}<div class="demo-bar"><strong>{{ L.t("demo_badge") }}</strong>{{ L.t("demo_note") }}</div>{% endif %}
+<header class="top">
+  <div class="top-inner">
+    {{ m.brand(url("today")) }}
+    <nav class="nav-top" aria-label="{{ L.t('nav_main') }}">
+      {% for key, ic in nav %}{% set href = url(key) %}
+      {% if href %}<a href="{{ href }}"{% if page == key %} aria-current="page"{% endif %}>{{ L.t("nav_" + key) }}</a>{% else %}<span>{{ L.t("nav_" + key) }}</span>{% endif %}
+      {% endfor %}
+    </nav>
+    <div class="top-tools">
+      {% if url("data") %}<a class="top-data" href="{{ url('data') }}"{% if page == "data" %} aria-current="page"{% endif %}>{{ L.t("nav_data") }}</a>{% endif %}
+      <button class="icon-btn" type="button" data-theme-toggle hidden
+        data-label-system="{{ L.t('theme') }}: {{ L.t('theme_system') }}"
+        data-label-light="{{ L.t('theme') }}: {{ L.t('theme_light') }}"
+        data-label-dark="{{ L.t('theme') }}: {{ L.t('theme_dark') }}"
+        aria-label="{{ L.t('theme') }}">
+        <span class="theme-icon is-system">{{ m.icon("auto") }}</span>
+        <span class="theme-icon is-light">{{ m.icon("sun") }}</span>
+        <span class="theme-icon is-dark">{{ m.icon("moon") }}</span>
+      </button>
+      {% if logout_token %}
+      <form method="post" action="{{ url('logout') }}">
+        <input type="hidden" name="token" value="{{ logout_token }}">
+        <button class="icon-btn" type="submit" aria-label="{{ L.t('logout') }}" title="{{ L.t('logout') }}">{{ m.icon("logout") }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</header>
+<main class="{% block main_class %}{% endblock %}">
+{% block content %}{% endblock %}
+<footer class="foot">
+  {% if sync %}<span class="sync-pill{% if not sync.last %} is-off{% endif %}">{{ sync.text }}</span>{% endif %}
+  {% call m.link(url("data")) %}{{ L.t("data_title") }}{% endcall %}
+  <span class="sp">Thresy{% if demo %} · {{ L.t("demo_badge") }}{% endif %}</span>
+</footer>
+</main>
+<nav class="nav-bottom" aria-label="{{ L.t('nav_main') }}">
+  {% for key, ic in nav %}
+  {% if url(key) %}<a href="{{ url(key) }}"{% if page == key %} aria-current="page"{% endif %}>{{ m.icon(ic) }}<span>{{ L.t("nav_" + key) }}</span></a>
+  {% else %}<span>{{ m.icon(ic) }}<span>{{ L.t("nav_" + key) }}</span></span>{% endif %}
+  {% endfor %}
+</nav>
+{% endblock %}
+{% if inline %}<script>{{ inline.js }}</script>{% endif %}
+</body>
+</html>
