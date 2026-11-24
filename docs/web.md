@@ -23,7 +23,7 @@ a browser would be a transport (`thresy.transport`), not part of the dashboard.
 | One run (`/runs/<id>`) | Distance, time, pace, heart rate, ascent, cadence; the planned session it fulfilled; the shape of the track; splits against the run's average pace; first and second half; heart-rate drift; pace, heart rate and altitude over the distance with a shared crosshair; reps of a structured session; climbs; segment efforts |
 | Trends (`/trends`) | Weekly volume of half a year with the longest run of each week; the year to date against earlier years; HRV, resting heart rate and sleep over twelve weeks with their usual range and a 7-day average |
 | Races (`/races`) | The next race with a countdown, distance, ascent and goal; other races to come; results |
-| Segments (`/segments`) | Every stored segment with its best and latest effort and all efforts over time |
+| Segments (`/segments`) | Every stored segment with its best and latest effort and all efforts over time. These are the efforts in the cache that `coach analysis segments` fills; with its read-only role the dashboard does not match new runs itself |
 | Data (`/data`) | The last sync, the Garmin login, the last backup and restore check, how much the database holds, and the same notices as on Today |
 
 Every number comes from the functions behind the `coach` commands: `thresy.analysis.night`,
