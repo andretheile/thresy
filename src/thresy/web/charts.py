@@ -17,6 +17,7 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 
 from markupsafe import Markup, escape
@@ -236,6 +237,145 @@ def _value_at(points: list[tuple[int, float]], doy: float) -> float | None:
     return last
 
 
+Box = tuple[float, float, float, float]
+"""x0, y0, x1, y1 in SVG units."""
+
+
+def _segment_hits_box(x1: float, y1: float, x2: float, y2: float, box: Box) -> bool:
+    """Whether the segment touches the box (Liang-Barsky clipping)."""
+    bx0, by0, bx1, by1 = box
+    dx, dy = x2 - x1, y2 - y1
+    u0, u1 = 0.0, 1.0
+    for p, q in ((-dx, x1 - bx0), (dx, bx1 - x1), (-dy, y1 - by0), (dy, by1 - y1)):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        t = q / p
+        if p < 0:
+            u0 = max(u0, t)
+        else:
+            u1 = min(u1, t)
+        if u0 > u1:
+            return False
+    return True
+
+
+def line_hits_box(points: Sequence[tuple[float, float]], box: Box) -> bool:
+    return any(_segment_hits_box(x1, y1, x2, y2, box) for (x1, y1), (x2, y2) in pairwise(points))
+
+
+def circle_hits_box(cx: float, cy: float, r: float, box: Box) -> bool:
+    nx = min(max(cx, box[0]), box[2])
+    ny = min(max(cy, box[1]), box[3])
+    return (cx - nx) ** 2 + (cy - ny) ** 2 <= r * r
+
+
+def boxes_overlap(a: Box, b: Box) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+@dataclass
+class Label:
+    """A placed direct label: its text lines, where they go, and the box they cover."""
+
+    year: int
+    box: Box
+    baselines: list[tuple[float, float]]
+    lines: list[tuple[str, str]]
+    anchor: str = "start"
+    leader: Box | None = None
+
+
+LABEL_PAD = 3.0
+"""Free space a label keeps around itself."""
+
+
+def year_labels(
+    lines: dict[int, list[tuple[float, float]]],
+    markers: list[tuple[float, float, float]],
+    *,
+    current_year: int,
+    current_end: tuple[float, float, float] | None,
+    plot: Box,
+    today_x: float | None,
+    value_text: Callable[[float], str],
+) -> list[Label]:
+    """Where the year labels go.
+
+    Earlier years are named in the right margin, at the height where their line leaves the
+    window, pushed apart when they would overlap (with a leader line). This year's label (year
+    and total) goes next to its end point, at the nearest place that touches no line, marker,
+    the today line or another label: beside the point, then above or below it, then on the
+    other side, with a leader line when it had to move away; as a last resort into the
+    corner the cumulative lines leave free (top left).
+    """
+    left, top, right, bottom = plot
+    out: list[Label] = []
+    margin = sorted((pts[-1][1], year) for year, pts in lines.items() if year != current_year)
+    placed: list[float] = []
+    for y0, year in margin:
+        ly = y0 + 4
+        for p in placed:
+            if ly - p < 14:
+                ly = p + 14
+        placed.append(ly)
+        lx = right + 8
+        leader = (right + 1, y0, lx - 2, ly - 4) if abs(ly - 4 - y0) > 2 else None
+        width = text_width(str(year), 12)
+        out.append(
+            Label(
+                year,
+                (lx, ly - 11, lx + width, ly + 3),
+                [(lx, ly)],
+                [(str(year), "lbl")],
+                leader=leader,
+            )
+        )
+    if current_end is None:
+        return out
+    x0, y0, value = current_end
+    texts = [(str(current_year), "val"), (value_text(value), "lbl")]
+    width = max(text_width(t, 12) for t, _ in texts) + 2
+    height = 30.0  # two lines of 12 px type, 15 px apart
+
+    def fits(box: Box) -> bool:
+        padded = (box[0] - LABEL_PAD, box[1] - LABEL_PAD, box[2] + LABEL_PAD, box[3] + LABEL_PAD)
+        if box[0] < left + 2 or box[2] > right - 2 or box[1] < top or box[3] > bottom - 2:
+            return False
+        if today_x is not None and padded[0] <= today_x <= padded[2]:
+            return False
+        if any(line_hits_box(pts, padded) for pts in lines.values()):
+            return False
+        if any(circle_hits_box(cx, cy, r, padded) for cx, cy, r in markers):
+            return False
+        return not any(boxes_overlap(padded, other.box) for other in out)
+
+    gap = 10.0
+    candidates: list[tuple[Box, str, float]] = []  # box, anchor, distance from the point
+    for step in range(0, int((bottom - top) / 6) + 1):
+        for sign in (0,) if step == 0 else (-1, 1):
+            dy = sign * step * 6
+            by0 = y0 + dy - height / 2
+            candidates.append(((x0 + gap, by0, x0 + gap + width, by0 + height), "start", abs(dy)))
+            candidates.append(((x0 - gap - width, by0, x0 - gap, by0 + height), "end", abs(dy) + 1))
+    candidates.sort(key=lambda c: c[2])
+    corner = (left + 8, top + 2, left + 8 + width, top + 2 + height)
+    chosen = next(((box, anchor) for box, anchor, _ in candidates if fits(box)), None)
+    leader = None
+    if chosen is None:
+        chosen = (corner, "start")
+    box, anchor = chosen
+    if box[1] > y0 or box[3] < y0:  # moved off the point's height: a leader line to it
+        edge_x = box[0] if anchor == "start" else box[2]
+        edge_y = min(max(y0, box[1] + 4), box[3] - 4)
+        leader = (x0, y0, edge_x - (2 if anchor == "start" else -2), edge_y)
+    tx = box[0] if anchor == "start" else box[2]
+    baselines = [(tx, box[1] + 11), (tx, box[1] + 26)]
+    out.append(Label(current_year, box, baselines, texts, anchor=anchor, leader=leader))
+    return out
+
+
 def year_lines(
     years: list[dict[str, Any]], lang: Lang, *, w: float, h: float = 230, today: date
 ) -> Markup:
@@ -279,47 +419,42 @@ def year_lines(
             continue
         svg.line(X(doy), top + ph, X(doy), top + ph + 4, "base")
         svg.text(X(doy) + 2, h - 6, lang.month(m, short=True), "tick")
-    if end < 366:
-        svg.line(X(today_doy), top, X(today_doy), top + ph, "today-line")
-    labels = []
+    lines: dict[int, list[tuple[float, float]]] = {}
+    markers: list[tuple[float, float, float]] = []
+    current_end = None
     for yr in clipped:
         pts = yr["points"]
         current = yr["year"] == today.year
         older = not current and yr["year"] < today.year - 1
         cls = "ln-accent" if current else ("ln-faint" if older else "ln-muted")
-        svg.path(_poly([(X(d), Y(v)) for d, v in pts]), cls)
+        lines[yr["year"]] = [(X(d), Y(v)) for d, v in pts]
+        svg.path(_poly(lines[yr["year"]]), cls)
         end_doy, end_v = pts[-1]
         if current:
-            svg.circle(X(end_doy), Y(end_v), 4.5, "dot-accent-ring")
+            current_end = (X(end_doy), Y(end_v), end_v)
+            markers.append((X(end_doy), Y(end_v), 6))
         else:
             same_day = _value_at(pts, today_doy)
             if same_day is not None and end < 366:
-                svg.circle(X(today_doy), Y(same_day), 3, "dot-muted-solid")
-        labels.append((Y(end_v), X(end_doy), yr["year"], end_v, current))
-    # labels: this year beside its end point, the others in the right margin, pushed apart
-    # when they would overlap (with a leader line back to their line)
-    margin = sorted((lb for lb in labels if not lb[4]), key=lambda lb: lb[0])
-    placed: list[float] = []
-    for y0, _x0, year, _value, _ in margin:
-        ly = y0 + 4
-        for p in placed:
-            if ly - p < 14:
-                ly = p + 14
-        placed.append(ly)
-        lx = left + pw + 8
-        if abs(ly - 4 - y0) > 2:
-            svg.line(left + pw + 1, y0, lx - 2, ly - 4, "leader")
-        svg.text(lx, ly, str(year), "lbl")
-    for y0, x0, year, value, current in labels:
-        if not current:
-            continue
-        text = f"{lang.int(value)} km"
-        lx = x0 + 9
-        anchor = "start"
-        if lx + text_width(text, 12) > left + pw:
-            lx, anchor = x0 - 9, "end"
-        svg.text(lx, y0 - 6, str(year), "val", anchor)
-        svg.text(lx, y0 + 9, text, "lbl", anchor)
+                markers.append((X(today_doy), Y(same_day), 4))
+    if end < 366:
+        svg.line(X(today_doy), top, X(today_doy), top + ph, "today-line")
+    for x, y, r in markers:
+        svg.circle(x, y, r - 1.5, "dot-accent-ring" if r > 5 else "dot-muted-solid")
+    labels = year_labels(
+        lines,
+        markers,
+        current_year=today.year,
+        current_end=current_end,
+        plot=(left, top, left + pw, top + ph),
+        today_x=X(today_doy) if end < 366 else None,
+        value_text=lambda v: f"{lang.int(v)} km",
+    )
+    for label in labels:
+        if label.leader:
+            svg.line(*label.leader, "leader")
+        for (tx, ty), (content, cls) in zip(label.baselines, label.lines, strict=True):
+            svg.text(tx, ty, content, cls, label.anchor)
     # hover: one target per week with every year's value on that day
     by_year = {yr["year"]: yr["points"] for yr in clipped}
     step = 7
@@ -626,15 +761,40 @@ def track(
     xy = [P(a, b) for a, b in pts]
     svg.path(_poly(xy), "route-halo")
     svg.path(_poly(xy), "route")
-    for la, lo, n in km_marks:
-        x, y = P(la, lo)
-        svg.circle(x, y, 7.5, "km-mark")
-        svg.text(x, y + 3.5, str(n), "km-num", "middle")
     sx0, sy0 = xy[0]
     ex, ey = xy[-1]
+    for x, y, n in placed_marks(
+        [(*P(la, lo), n) for la, lo, n in km_marks], [(sx0, sy0), (ex, ey)]
+    ):
+        svg.circle(x, y, KM_MARK_R, "km-mark")
+        svg.text(x, y + 3.5, str(n), "km-num", "middle")
     svg.circle(ex, ey, 6, "finish")
     svg.circle(sx0, sy0, 6, "start")
     return svg.render()
+
+
+KM_MARK_R = 7.5
+END_MARK_R = 6.0
+MARK_GAP = 2.0
+
+
+def placed_marks(
+    marks: Sequence[tuple[float, float, int]], ends: Sequence[tuple[float, float]]
+) -> list[tuple[float, float, int]]:
+    """The kilometre marks that fit: in order, each one only where it keeps clear of the
+    start, the finish and every mark already placed. Where a route runs over itself (laps,
+    out and back) the later marks would sit on the earlier ones; they are left out."""
+    kept: list[tuple[float, float, int]] = []
+    for x, y, n in marks:
+        clear_of_ends = all(
+            math.hypot(x - ex, y - ey) >= KM_MARK_R + END_MARK_R + MARK_GAP for ex, ey in ends
+        )
+        clear_of_marks = all(
+            math.hypot(x - kx, y - ky) >= 2 * KM_MARK_R + MARK_GAP for kx, ky, _ in kept
+        )
+        if clear_of_ends and clear_of_marks:
+            kept.append((x, y, n))
+    return kept
 
 
 def profile(

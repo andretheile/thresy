@@ -107,6 +107,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "msg_post_run": "Run debrief",
         "msg_other": "Message",
         "read_all": "Read all",
+        "read_more": "More",
+        "show_less": "Less",
         "coach_none": (
             "No briefing yet. The coach's latest morning briefing or run debrief appears here."
         ),
@@ -175,13 +177,17 @@ TEXTS: dict[str, dict[str, str]] = {
         "profile_hint": "Point at a chart to read the values at that distance.",
         "splits": "Splits",
         "halves": "First and second half",
-        "negative_split": "Negative split: the second half was faster.",
-        "positive_split": "The second half was {diff} /km slower.",
+        "negative_split": "Negative split: the second half was {diff} faster.",
+        "positive_split": "The second half was {diff} slower.",
         "even_split": "Even halves.",
         "drift": "Heart-rate drift",
-        "drift_text": "{bpm} bpm drift, {pct} % decoupling",
-        "drift_good": "Pace held without the heart rate creeping up.",
-        "drift_high": "The heart rate crept up at the same pace.",
+        "drift_text": (
+            "after the first 10 minutes, {pace_first} → {pace_second} /km at"
+            " {hr_first} → {hr_second} bpm, decoupling {pct} %"
+        ),
+        "drift_good": "Pace held at a decoupling under 5 %: aerobically steady.",
+        "drift_high": "Pace held, but the heart rate rose: a decoupling of 5 % or more.",
+        "drift_slower": "The second half was slower, so the drift says little about this run.",
         "drift_faster": "The second half was faster, so the drift says little about this run.",
         "climbs": "Climbs",
         "reps": "Reps",
@@ -405,6 +411,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "msg_post_run": "Laufbesprechung",
         "msg_other": "Nachricht",
         "read_all": "Alles lesen",
+        "read_more": "Mehr",
+        "show_less": "Weniger",
         "coach_none": (
             "Noch kein Briefing. Hier steht das letzte Morgenbriefing oder die letzte "
             "Laufbesprechung."
@@ -471,13 +479,17 @@ TEXTS: dict[str, dict[str, str]] = {
         "profile_hint": "Zeig auf ein Diagramm, um die Werte an dieser Stelle zu lesen.",
         "splits": "Kilometer",
         "halves": "Erste und zweite Hälfte",
-        "negative_split": "Negativer Split: die zweite Hälfte war schneller.",
-        "positive_split": "Die zweite Hälfte war {diff} /km langsamer.",
+        "negative_split": "Negativer Split: die zweite Hälfte war {diff} schneller.",
+        "positive_split": "Die zweite Hälfte war {diff} langsamer.",
         "even_split": "Gleichmäßige Hälften.",
         "drift": "Pulsdrift",
-        "drift_text": "{bpm} S/min Drift, {pct} % Entkopplung",
-        "drift_good": "Pace gehalten, ohne dass der Puls stieg.",
-        "drift_high": "Bei gleicher Pace stieg der Puls.",
+        "drift_text": (
+            "nach den ersten 10 Minuten {pace_first} → {pace_second} /km bei"
+            " {hr_first} → {hr_second} S/min, Entkopplung {pct} %"
+        ),
+        "drift_good": "Pace gehalten bei einer Entkopplung unter 5 %: aerob stabil.",
+        "drift_high": "Pace gehalten, aber der Puls stieg: Entkopplung 5 % oder mehr.",
+        "drift_slower": "Die zweite Hälfte war langsamer, daher sagt die Drift hier wenig.",
         "drift_faster": "Die zweite Hälfte war schneller, daher sagt die Drift hier wenig.",
         "climbs": "Anstiege",
         "reps": "Wiederholungen",
@@ -689,6 +701,25 @@ class Lang:
             return "–"
         total = round(float(s_per_km))  # type: ignore[arg-type]
         return f"{total // 60}:{total % 60:02d}"
+
+    def pace_delta(self, seconds: float | None) -> str:
+        """A difference in pace, without sign: ``7 s/km``, ``1:05 min/km``."""
+        if _missing(seconds):
+            return "–"
+        total = round(abs(float(seconds)))  # type: ignore[arg-type]
+        if total < 60:
+            return f"{total} s/km"
+        return f"{total // 60}:{total % 60:02d} min/km"
+
+    def signed_seconds(self, seconds: float | None) -> str:
+        """A difference in time with its sign and unit: ``+7 s``, ``-1:05 min`` (with a
+        typographic minus), ``±0 s``."""
+        if _missing(seconds):
+            return "–"
+        total = round(float(seconds))  # type: ignore[arg-type]
+        sign = "±" if total == 0 else "+" if total > 0 else "−"
+        total = abs(total)
+        return f"{sign}{total} s" if total < 60 else f"{sign}{total // 60}:{total % 60:02d} min"
 
     def clock(self, seconds: float | None) -> str:
         """A duration as a clock: ``48:10``, ``1:02:05``."""

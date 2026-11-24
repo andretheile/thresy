@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime, timedelta
@@ -13,7 +14,7 @@ from markupsafe import escape
 from typer.testing import CliRunner
 
 from thresy.cli import get_app
-from thresy.web import charts, pages
+from thresy.web import charts, pages, text
 from thresy.web.demo import DEMO_NOW, DemoSource, build
 from thresy.web.export import export_pages, single_page
 from thresy.web.i18n import TEXTS, Lang
@@ -141,19 +142,93 @@ def test_trouble_is_shown_calmly_and_honestly() -> None:
     assert pages.overview_page(DemoSource("full", "en"), EN, coach_name="T")["sync"]["ok"]
 
 
-def test_shorten_keeps_words_and_drops_markdown() -> None:
-    short, more = pages.shorten("**Today:** easy " + "word " * 100, limit=40)
-    assert more and short.endswith("…") and "**" not in short
-    assert pages.shorten("short", limit=40) == ("short", False)
+def test_excerpt_keeps_words_and_drops_markdown() -> None:
+    short, more = text.excerpt(
+        "**Today:** easy `5 km`, [details](https://x.org) " + "word " * 100, 40
+    )
+    assert more and short.endswith("…")
+    assert not any(mark in short for mark in ("**", "`", "[", "]("))
+    assert short.startswith("Today: easy 5 km, details")
+    assert text.excerpt("short", 40) == ("short", False)
+
+
+DEBRIEF_WITH_TABLE = """Nice and **easy** yesterday. The blocks were clean:
+
+| Block | Pace | HR |
+|---|---:|---:|
+| 1 | 3:56 | 164 |
+| 2 | 3:58 | 166 |
+
+Sunday is the key session."""
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (DEBRIEF_WITH_TABLE, "Nice and easy yesterday. The blocks were clean…"),
+        ("Two things:\n\n- sleep\n- eat\n\nThat is all.", "Two things…"),
+        ("Look:\n\n```\ncode\n```", "Look…"),
+        ("Intro.\n\n> a quote", "Intro."),
+        ("| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter the table.", "After the table."),
+        ("- only\n- a list", "only · a list"),
+    ],
+)
+def test_excerpt_is_prose_only(source: str, expected: str) -> None:
+    short, more = text.excerpt(source)
+    assert short == expected
+    assert more
+    assert "|" not in short
+
+
+def test_tables_are_rendered_without_inline_styles() -> None:
+    html = text.render_markdown(DEBRIEF_WITH_TABLE)
+    assert '<div class="md-table"><table>' in html
+    assert '<th class="al-right">Pace</th>' in html
+    assert "<td>1</td>" in html and "style=" not in html
+    assert "<strong>easy</strong>" in html
 
 
 def test_markdown_is_safe() -> None:
-    html = pages.render_markdown(
+    html = text.render_markdown(
         "<script>alert(1)</script> [x](https://example.org) ![i](https://example.org/i.png)"
+        " [y](javascript:alert(1))"
     )
     assert "<script>" not in html
     assert 'rel="noopener noreferrer nofollow"' in html
     assert "<img" not in html
+    assert "javascript:" not in html.replace("[y](javascript:alert(1))", "")
+
+
+def test_a_debrief_with_a_table_is_shortened_to_prose() -> None:
+    source = DemoSource("trouble", "en")
+    assert "| Block |" in source.coach_message()["text"]
+    ctx = pages.overview_page(source, EN, coach_name="Thresy")
+    assert ctx["coach"]["more"] and "|" not in ctx["coach"]["short"]
+    html = Renderer(EN).render("overview.html", ctx)
+    assert '<details class="expand quote">' in html
+    assert '<div class="md-table"><table>' in html
+    assert not re.search(r"\sstyle=", html)
+
+
+def test_long_plan_descriptions_open_on_request() -> None:
+    source = DemoSource("full", "en")
+    ctx = pages.overview_page(source, EN, coach_name="Thresy")
+    session = ctx["today_plan"][0]
+    assert len(session["description"]) > 800
+    assert session["desc_more"] and len(session["desc_short"]) <= pages.DESCRIPTION_CHARS + 1
+    html = Renderer(EN).render("overview.html", ctx)
+    assert '<details class="expand desc">' in html
+    # on the page of the run that fulfilled a session with a long description
+    monday = source.today() - timedelta(days=source.today().weekday())
+    run = next(
+        a for a in source.runs(since=monday) if source.planned_for(a.id)[0]["kind"] == "threshold"
+    )
+    run_ctx = pages.run_page(source, EN, run.id)
+    assert run_ctx["plan"][0]["desc_more"]
+    assert '<details class="expand desc">' in Renderer(EN).render("run.html", run_ctx)
+    # short ones stay as they are
+    short = next(w for w in source.data.workouts if len(w["description"]) < 100)
+    assert not pages._workout(short, EN, source.today())["desc_more"]
 
 
 class StateSource(DemoSource):
@@ -246,6 +321,94 @@ def test_templates_use_known_texts() -> None:
         assert f"nav_{key}" in TEXTS["en"]
 
 
+@pytest.mark.parametrize(
+    ("lang", "diff", "expected"),
+    [
+        (EN, 7.0, "The second half was 7 s/km slower."),
+        (DE, 7.0, "Die zweite Hälfte war 7 s/km langsamer."),
+        (EN, -12.4, "Negative split: the second half was 12 s/km faster."),
+        (DE, -12.4, "Negativer Split: die zweite Hälfte war 12 s/km schneller."),
+        (EN, 65.0, "The second half was 1:05 min/km slower."),
+        (DE, 65.0, "Die zweite Hälfte war 1:05 min/km langsamer."),
+        (EN, 1.5, "Even halves."),
+        (DE, -1.5, "Gleichmäßige Hälften."),
+    ],
+)
+def test_halves_sentence_carries_its_unit(lang: Lang, diff: float, expected: str) -> None:
+    assert pages.halves_sentence(lang, {"pace_diff_s_per_km": diff}) == expected
+
+
+def test_no_difference_without_a_unit() -> None:
+    """A placeholder right before "/km" must be a pace (4:35 /km), never a difference."""
+    for code, texts in TEXTS.items():
+        for key, value in texts.items():
+            for name in re.findall(r"\{(\w+)\}\s*/km", value):
+                assert name.startswith("pace"), (code, key)
+    assert EN.pace_delta(7.2) == "7 s/km" and DE.pace_delta(-65) == "1:05 min/km"
+    assert EN.signed_seconds(-7) == "−7 s" and EN.signed_seconds(0.3) == "±0 s"
+    assert EN.signed_seconds(75) == "+1:15 min"
+
+
+def drift(pace1: float, pace2: float, hr1: float, hr2: float, pct: float) -> dict[str, Any]:
+    return {
+        "first": {"pace_s_per_km": pace1, "hr": hr1},
+        "second": {"pace_s_per_km": pace2, "hr": hr2},
+        "drift_bpm": hr2 - hr1,
+        "decoupling_pct": pct,
+    }
+
+
+@pytest.mark.parametrize(
+    ("numbers", "verdict"),
+    [
+        # the case seen on real data: 7 s/km slower, 6 beats lower, 3.3 % decoupling
+        (drift(300, 307, 160, 154, 3.3), "drift_slower"),
+        (drift(300, 302.5, 150, 152, 3.0), "drift_good"),  # within the tolerance
+        (drift(300, 301, 150, 160, 7.2), "drift_high"),
+        (drift(300, 290, 150, 158, -1.0), "drift_faster"),
+        (drift(300, 296, 150, 150, -4.0), "drift_faster"),
+    ],
+)
+def test_drift_verdict_follows_the_numbers(numbers: dict[str, Any], verdict: str) -> None:
+    assert pages.drift_verdict(numbers) == verdict
+
+
+@pytest.mark.parametrize("lang", [EN, DE], ids=["en", "de"])
+def test_no_verdict_across_reps(lang: Lang) -> None:
+    source = DemoSource("full", lang.code)
+    monday = source.today() - timedelta(days=source.today().weekday())
+    blocks = next(
+        a for a in source.runs(since=monday) if source.planned_for(a.id)[0]["kind"] == "threshold"
+    )
+    ctx = pages.run_page(source, lang, blocks.id)
+    assert ctx["reps"]["rows"]  # reps detected
+    assert ctx["halves"] and ctx["halves_text"] is None
+    assert ctx["drift"]["verdict"] is None and "→" in ctx["drift"]["text"]
+    html = Renderer(lang).render("run.html", ctx)
+    for key in ("drift_good", "drift_high", "drift_faster", "drift_slower", "even_split"):
+        assert esc(lang.t(key)) not in html
+    # a steady run without reps keeps its verdict, and it matches its numbers
+    easy = next(
+        a
+        for a in source.runs()
+        if a.has_records
+        and "strides" not in (a.name or "")
+        and source.planned_for(a.id)
+        and source.planned_for(a.id)[0]["kind"] == "easy"
+    )
+    ctx = pages.run_page(source, lang, easy.id)
+    assert "reps" not in ctx
+    if "drift" in ctx:
+        assert ctx["drift"]["verdict"] is not None
+
+
+@pytest.mark.parametrize("lang", [EN, DE], ids=["en", "de"])
+def test_resting_heart_rate_deltas_carry_their_unit(lang: Lang) -> None:
+    rhr = pages.overview_page(DemoSource("full", lang.code), lang, coach_name="T")["night"]["rhr"]
+    assert rhr["usual"].endswith(lang.t("unit_bpm"))
+    assert rhr["delta"] == lang.t("as_usual") or lang.t("unit_bpm") in rhr["delta"]
+
+
 def test_number_and_date_formats() -> None:
     assert EN.num(1234.5, 1) == "1,234.5"
     assert DE.num(1234.5, 1) == "1.234,5"
@@ -283,6 +446,85 @@ def test_charts_are_well_formed_svg(full: DemoSource) -> None:
             ET.fromstring(svg.replace("&nbsp;", " "))
             count += 1
     assert count > 40
+
+
+def close_years(today: date, this_year_km: float, last_year_km: float) -> list[dict[str, Any]]:
+    """Two years whose totals on ``today``'s day are close: steady running, a run every
+    other day."""
+    doy = today.timetuple().tm_yday
+    out = []
+    for year, total in ((today.year - 1, last_year_km), (today.year, this_year_km)):
+        end = doy if year == today.year else 365
+        per_run = total / (doy / 2)
+        pts, cum = [(1, 0.0)], 0.0
+        for day in range(2, end + 1, 2):
+            cum += per_run
+            pts.append((day, round(cum, 1)))
+        out.append({"year": year, "points": pts, "total": cum})
+    return out
+
+
+@pytest.mark.parametrize("w", [358, 840])
+@pytest.mark.parametrize(("this_km", "last_km"), [(2460, 2350), (2350, 2460), (2400, 2400)])
+def test_year_labels_touch_no_line_and_no_label(
+    monkeypatch: pytest.MonkeyPatch, w: int, this_km: float, last_km: float
+) -> None:
+    seen: list[tuple[Any, list[charts.Label]]] = []
+    real = charts.year_labels
+
+    def spy(lines: Any, markers: Any, **kw: Any) -> list[charts.Label]:
+        labels = real(lines, markers, **kw)
+        seen.append(((lines, markers, kw), labels))
+        return labels
+
+    monkeypatch.setattr(charts, "year_labels", spy)
+    today = date(2030, 4, 18)
+    svg = str(charts.year_lines(close_years(today, this_km, last_km), EN, w=w, today=today))
+    ET.fromstring(svg)
+    (lines, markers, _), labels = seen[0]
+    current = next(label for label in labels if label.year == today.year)
+    assert current.lines[1][0] == f"{EN.int(this_km)} km"
+    for label in labels:
+        for pts in lines.values():
+            assert not charts.line_hits_box(pts, label.box), (label.year, label.box)
+        if label is current:
+            for cx, cy, r in markers:
+                assert not charts.circle_hits_box(cx, cy, r, label.box)
+        for other in labels:
+            assert other is label or not charts.boxes_overlap(label.box, other.box)
+
+
+def test_km_marks_that_would_collide_are_left_out() -> None:
+    ends = [(0.0, 0.0), (0.0, 0.0)]  # out and back: start and finish at home
+    out_and_back = [(30.0 * k, 0.0) if k <= 4 else (30.0 * (8 - k), 0.0) for k in range(1, 8)]
+    kept = charts.placed_marks([(x, y, k) for k, (x, y) in enumerate(out_and_back, 1)], ends)
+    assert [n for _, _, n in kept] == [1, 2, 3, 4]  # 5, 6 and 7 sit on 3, 2 and 1
+    near_start = charts.placed_marks([(5.0, 0.0, 1), (40.0, 0.0, 2)], ends)
+    assert [n for _, _, n in near_start] == [2]
+
+
+def mark_centres(svg: str) -> list[tuple[float, float]]:
+    return [
+        (float(x), float(y))
+        for x, y in re.findall(r'<circle class="km-mark" cx="([\d.]+)" cy="([\d.]+)"', svg)
+    ]
+
+
+def test_tracks_that_cross_themselves_have_no_overlapping_marks(full: DemoSource) -> None:
+    crossing = [
+        a
+        for a in full.runs()
+        if a.has_records and full.data.specs[a.id].template in ("park", "outback")
+    ]
+    assert {full.data.specs[a.id].template for a in crossing} == {"park", "outback"}
+    for run in crossing:
+        pair = pages.run_page(full, EN, run.id)["track"]
+        for svg in (str(pair.narrow), str(pair.wide)):
+            centres = mark_centres(svg)
+            assert centres, run.id
+            for i, (x1, y1) in enumerate(centres):
+                for x2, y2 in centres[i + 1 :]:
+                    assert math.hypot(x1 - x2, y1 - y2) >= 2 * charts.KM_MARK_R, run.id
 
 
 def test_chart_text_is_escaped() -> None:

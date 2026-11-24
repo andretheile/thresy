@@ -8,17 +8,17 @@ selects, combines and formats them.
 from __future__ import annotations
 
 import math
-import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from markupsafe import Markup
 
 from thresy.analysis.data import Activity, pace_s_per_km
 from thresy.logs import redact
 from thresy.tools.plan import target_text
-from thresy.web import charts
+from thresy.web import charts, text
 from thresy.web.i18n import Lang
 from thresy.web.source import Source, monday_of, parse_utc
 
@@ -151,44 +151,15 @@ def notices(source: Source, lang: Lang) -> list[dict[str, str]]:
     return out
 
 
-def _plain(text: str) -> str:
-    """Markdown as plain text, for the short version of a message."""
-    text = re.sub(r"`{1,3}", "", text)
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)
-    text = re.sub(r"(\*\*|__|\*|_|~~)(.+?)\1", r"\2", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def shorten(text: str, limit: int = 260) -> tuple[str, bool]:
-    plain = _plain(text)
-    if len(plain) <= limit:
-        return plain, False
-    cut = plain[:limit].rsplit(" ", 1)[0].rstrip(",;:–-")
-    return cut + "…", True
-
-
-def render_markdown(text: str) -> str:
-    """The full message as HTML: CommonMark without raw HTML and without images; links open
-    without a referrer."""
-    from markdown_it import MarkdownIt
-
-    md = MarkdownIt("commonmark", {"html": False, "linkify": False}).disable("image")
-
-    def link_open(renderer: Any, tokens: Any, idx: int, options: Any, env: Any) -> str:
-        tokens[idx].attrSet("rel", "noopener noreferrer nofollow")
-        return renderer.renderToken(tokens, idx, options, env)
-
-    md.add_render_rule("link_open", link_open)
-    return md.render(text)
-
-
 # -- overview --------------------------------------------------------------------------------------
 
 
 MIN_WEEKS_SHOWN = 6
 MIN_NIGHTS = 14
 """The recovery trends need at least this many nights in their 12 weeks."""
+DESCRIPTION_CHARS = 180
+"""A planned session's description is shown up to about this length (some three lines on a
+phone); a longer one opens on request."""
 
 
 def trim_weeks(weeks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -286,20 +257,24 @@ def _night(source: Source, lang: Lang, today: date) -> dict[str, Any]:
         "rhr": {
             "value": lang.int(rhr) if rhr is not None else "–",
             "delta": (
-                lang.t("vs_usual", delta=lang.signed(rhr_delta, 0))
+                lang.t("vs_usual", delta=f"{lang.signed(rhr_delta, 0)} {lang.t('unit_bpm')}")
                 if rhr_delta is not None and round(rhr_delta) != 0
                 else lang.t("as_usual")
                 if rhr_delta is not None
                 else ""
             ),
-            "usual": f"{lang.int(rhr_low)}–{lang.int(rhr_high)}" if rhr_low is not None else "",
+            "usual": (
+                f"{lang.int(rhr_low)}–{lang.int(rhr_high)} {lang.t('unit_bpm')}"
+                if rhr_low is not None
+                else ""
+            ),
             "strip": charts.range_strip(
                 rhr,
                 rhr_low,
                 rhr_high,
                 lang,
                 w=150,
-                unit="bpm",
+                unit=lang.t("unit_bpm"),
                 hue="accent",
                 label=lang.t("resting_hr"),
             ),
@@ -328,12 +303,19 @@ def _workout(w: dict[str, Any], lang: Lang, today: date) -> dict[str, Any]:
         bits.append(f"{lang.t('col_hr')} {target['hr']}")
     if target.get("ascent_m") is not None:
         bits.append(f"+{lang.int(float(target['ascent_m']))} m")
+    description = w.get("description") or ""
+    # a description can run to a thousand characters (conditions, pacing, shoes): a few
+    # lines of it, the rest behind a control
+    desc_short, desc_more = text.excerpt(description, DESCRIPTION_CHARS)
     return {
         "id": w["id"],
         "title": w["title"],
         "kind": w.get("kind"),
         "is_rest": w.get("kind") == "rest",
-        "description": w.get("description") or "",
+        "description": description,
+        "desc_short": desc_short,
+        "desc_more": desc_more,
+        "desc_full": Markup(text.render_markdown(description)) if description else "",
         "target": bits,
         "target_text": target_text(target),
         "status": status,
@@ -395,7 +377,7 @@ def _week(source: Source, lang: Lang, today: date) -> dict[str, Any]:
         else lang.t("week_km_noplan", done=lang.num(t["run_km"], 1)),
         "runs": lang.tn("week_runs", t["runs"]),
         "strip": charts.pair(charts.week_strip, PHONE_W, HALF_W, days=days, lang=lang, today=today),
-        "meter": charts.Markup(_meter(t["run_km"], t["planned_km"])) if t["planned_km"] else None,
+        "meter": Markup(_meter(t["run_km"], t["planned_km"])) if t["planned_km"] else None,
     }
 
 
@@ -422,7 +404,7 @@ def _coach(source: Source, lang: Lang, coach_name: str, today: date) -> dict[str
     )
     ts = parse_utc(msg["ts"])
     local = ts.astimezone(source.zone) if ts else None
-    short, more = shorten(msg["text"])
+    short, more = text.excerpt(msg["text"])
     when = ""
     if local is not None:
         when = (
@@ -436,7 +418,7 @@ def _coach(source: Source, lang: Lang, coach_name: str, today: date) -> dict[str
         "when": when,
         "short": short,
         "more": more,
-        "full": charts.Markup(render_markdown(msg["text"])),
+        "full": Markup(text.render_markdown(msg["text"])),
     }
 
 
@@ -563,6 +545,44 @@ def runs_page(source: Source, lang: Lang, year: int | None) -> dict[str, Any]:
 SMOOTH_S = 30
 """Speed is averaged over this many seconds before binning, so the pace line shows the
 effort rather than GPS noise."""
+
+
+EVEN_S_PER_KM = 2.0
+"""Halves whose paces differ by less than this count as even."""
+
+
+def halves_sentence(lang: Lang, halves: dict[str, Any]) -> str:
+    """The first half against the second, from ``activity.halves``: faster, slower or even,
+    with the difference and its unit."""
+    diff = halves["pace_diff_s_per_km"]
+    if diff <= -EVEN_S_PER_KM:
+        return lang.t("negative_split", diff=lang.pace_delta(diff))
+    if diff >= EVEN_S_PER_KM:
+        return lang.t("positive_split", diff=lang.pace_delta(diff))
+    return lang.t("even_split")
+
+
+PACE_HELD_S_PER_KM = 3.0
+"""Two halves within this much of each other count as the same pace."""
+DECOUPLING_LIMIT_PCT = 5.0
+"""Below this the heart rate kept pace with the speed (docs/analysis.md)."""
+
+
+def drift_verdict(drift: dict[str, Any]) -> str | None:
+    """The text key for ``activity.hr_drift``, following from the numbers the page shows
+    (pace and heart rate of both halves, decoupling): "pace held" only when the paces are
+    within :data:`PACE_HELD_S_PER_KM`; a clearly faster or slower second half makes the
+    drift say little."""
+    first, second = drift.get("first") or {}, drift.get("second") or {}
+    pct = drift.get("decoupling_pct")
+    p1, p2 = first.get("pace_s_per_km"), second.get("pace_s_per_km")
+    if pct is None or p1 is None or p2 is None:
+        return None
+    if p2 - p1 < -PACE_HELD_S_PER_KM:
+        return "drift_faster"
+    if p2 - p1 > PACE_HELD_S_PER_KM:
+        return "drift_slower"
+    return "drift_good" if pct < DECOUPLING_LIMIT_PCT else "drift_high"
 
 
 def _downsample(df: pd.DataFrame, n: int = 240) -> pd.DataFrame:
@@ -782,13 +802,7 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
         {
             "n": lang.num(s["end_m"] / 1000, 1) if s["dist_m"] < 990 else s["n"],
             "pace": lang.pace(s["pace_s_per_km"]),
-            "delta": (
-                ("−" if d < 0 else "+") + lang.clock(abs(d))[-4:].lstrip("0").lstrip(":")
-                if d is not None and round(abs(d)) >= 1
-                else "±0"
-            )
-            if d is not None
-            else "",
+            "delta": lang.signed_seconds(d) if d is not None else "",
             "faster": d is not None and d < 0,
             "bar": charts.split_bar(d, scale),
             "hr": lang.int(s["avg_hr"]) if s.get("avg_hr") else "–",
@@ -798,49 +812,6 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
         for s, d in zip(splits, deltas, strict=True)
     ]
     out["avg_pace"] = lang.pace(avg)
-    halves = summary.get("halves")
-    if halves and halves.get("pace_diff_s_per_km") is not None:
-        diff = halves["pace_diff_s_per_km"]
-        if halves["negative_split"]:
-            out["halves_text"] = lang.t("negative_split")
-        elif abs(diff) < 2:
-            out["halves_text"] = lang.t("even_split")
-        else:
-            out["halves_text"] = lang.t(
-                "positive_split",
-                diff=lang.pace(diff).lstrip("0:") if diff < 60 else lang.pace(diff),
-            )
-        out["halves"] = [
-            {
-                "pace": lang.pace(halves[h]["pace_s_per_km"]),
-                "hr": lang.int(halves[h]["avg_hr"]) if halves[h]["avg_hr"] else "–",
-            }
-            for h in ("first", "second")
-        ]
-    drift = summary.get("drift") or {}
-    if drift.get("decoupling_pct") is not None:
-        pct = drift["decoupling_pct"]
-        # below about 5 % the pace was held without the heart rate creeping up
-        # (docs/analysis.md); a clearly faster second half makes the number meaningless
-        verdict = "drift_faster" if pct <= -5 else "drift_good" if pct < 5 else "drift_high"
-        out["drift"] = {
-            "text": lang.t(
-                "drift_text", bpm=lang.signed(drift["drift_bpm"], 0), pct=lang.num(pct, 1)
-            ),
-            "verdict": lang.t(verdict),
-            "good": verdict == "drift_good",
-        }
-    out["climbs"] = [
-        {
-            "km": f"{lang.num(c['start_km'], 1)}–{lang.num(c['end_km'], 1)}",
-            "gain": f"+{lang.int(c['gain_m'])} m",
-            "grade": f"{lang.num(c['grade_pct'], 1)} %",
-            "time": lang.clock(c["time_s"]),
-            "pace": lang.pace(c["pace_s_per_km"]),
-            "hr": lang.int(c["avg_hr"]) if c.get("avg_hr") else "–",
-        }
-        for c in summary.get("climbs") or []
-    ]
     # reps of a structured session
     try:
         laps = source.laps(activity_id, df["ts"].iloc[0] if "ts" in df else None)
@@ -848,7 +819,8 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
     except Exception:  # detection is best effort; the page works without it
         iv = {"reps": []}
     reps = iv.get("reps") or []
-    if len(reps) >= 2:
+    has_reps = len(reps) >= 2
+    if has_reps:
         s = iv.get("summary") or {}
         out["reps"] = {
             "summary": lang.t("reps_summary", n=len(reps), pace=lang.pace(s.get("pace_s_per_km"))),
@@ -863,6 +835,44 @@ def run_page(source: Source, lang: Lang, activity_id: int) -> dict[str, Any] | N
                 for r in reps
             ],
         }
+    # Halves and drift across reps and breaks say little: with reps, the numbers only.
+    halves = summary.get("halves")
+    if halves and halves.get("pace_diff_s_per_km") is not None:
+        out["halves_text"] = None if has_reps else halves_sentence(lang, halves)
+        out["halves"] = [
+            {
+                "pace": lang.pace(halves[h]["pace_s_per_km"]),
+                "hr": lang.int(halves[h]["avg_hr"]) if halves[h]["avg_hr"] else "–",
+            }
+            for h in ("first", "second")
+        ]
+    drift = summary.get("drift") or {}
+    if drift.get("decoupling_pct") is not None:
+        verdict = None if has_reps else drift_verdict(drift)
+        first, second = drift["first"], drift["second"]
+        out["drift"] = {
+            "text": lang.t(
+                "drift_text",
+                pace_first=lang.pace(first["pace_s_per_km"]),
+                pace_second=lang.pace(second["pace_s_per_km"]),
+                hr_first=lang.int(first["hr"]),
+                hr_second=lang.int(second["hr"]),
+                pct=lang.num(drift["decoupling_pct"], 1),
+            ),
+            "verdict": lang.t(verdict) if verdict else None,
+            "good": verdict == "drift_good",
+        }
+    out["climbs"] = [
+        {
+            "km": f"{lang.num(c['start_km'], 1)}–{lang.num(c['end_km'], 1)}",
+            "gain": f"+{lang.int(c['gain_m'])} m",
+            "grade": f"{lang.num(c['grade_pct'], 1)} %",
+            "time": lang.clock(c["time_s"]),
+            "pace": lang.pace(c["pace_s_per_km"]),
+            "hr": lang.int(c["avg_hr"]) if c.get("avg_hr") else "–",
+        }
+        for c in summary.get("climbs") or []
+    ]
     return out
 
 

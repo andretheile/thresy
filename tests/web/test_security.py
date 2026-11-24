@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import threading
 import time
 from contextlib import contextmanager
 from typing import Any
 
+import httpx
 import psycopg
 import pytest
 from starlette.routing import Mount, Route
@@ -199,6 +202,29 @@ def test_rotating_clients_meet_the_global_limit() -> None:
     assert limiter.check("10.0.0.202") == 20
     tick.now += 3601  # failures older than the window no longer count
     assert limiter.check("10.0.0.200") == 0
+
+
+def test_checks_in_flight_count_against_the_free_attempts() -> None:
+    tick = Tick()
+    limiter = Limiter(client_free=3, global_free=5, base_s=10, clock=tick)
+    granted = [limiter.reserve("a") for _ in range(10)]
+    assert granted.count(0.0) == 3  # a burst gets the free count, not one check per request
+    assert all(w > 0 for w in granted[3:])
+    assert limiter.reserve("b") == 0.0 and limiter.reserve("c") == 0.0
+    assert limiter.reserve("d") > 0  # overall: 5 in flight
+    for name in ("a", "a", "a", "b", "c"):
+        limiter.finish(name, ok=False)
+    assert limiter.check("a") == 10  # now as failures
+
+    assert limiter._in_flight == {} and limiter._in_flight_total == 0
+
+
+def test_a_successful_check_frees_its_reservation() -> None:
+    limiter = Limiter(client_free=1, clock=Tick())
+    assert limiter.reserve("a") == 0.0
+    assert limiter.reserve("a") > 0
+    limiter.finish("a", ok=True)
+    assert limiter.reserve("a") == 0.0
 
 
 def test_limiter_memory_is_bounded() -> None:
@@ -574,6 +600,60 @@ def test_rotating_a_forwarded_header_does_not_help(make_app: Any) -> None:
     for n in range(6):
         response = login(c, "wrong", **{"x-forwarded-for": f"198.51.100.{n}, 203.0.113.7"})
     assert response.status_code == 429
+
+
+def burst(
+    app: Any, count: int, monkeypatch: pytest.MonkeyPatch, *, spread: bool
+) -> tuple[list[int], int]:
+    """``count`` login attempts with a wrong password at the same time; returns their status
+    codes and how many passwords were actually checked. Each check takes a while, so the
+    requests overlap; with ``spread`` every request comes from its own address."""
+    checked = {"n": 0}
+    lock = threading.Lock()
+
+    def slow_verify(password: str, stored: Any) -> bool:
+        with lock:
+            checked["n"] += 1
+        time.sleep(0.15)
+        return False
+
+    monkeypatch.setattr(webapp, "verify_password", slow_verify)
+    token = form_token(client(app).get("/login"))
+
+    async def run() -> list[int]:
+        transport = httpx.ASGITransport(app=app, client=("198.51.100.1", 4711))
+        async with httpx.AsyncClient(transport=transport, base_url="https://testserver") as c:
+
+            async def attempt(n: int) -> int:
+                headers = {"origin": "https://testserver"}
+                if spread:
+                    headers["x-real-ip"] = f"203.0.{n // 200}.{n % 200}"
+                response = await c.post(
+                    "/login", data={"token": token, "password": "wrong"}, headers=headers
+                )
+                return response.status_code
+
+            return list(await asyncio.gather(*(attempt(n) for n in range(count))))
+
+    return asyncio.run(run()), checked["n"]
+
+
+def test_a_burst_from_one_client_gets_only_the_free_checks(
+    make_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, app = make_app()
+    codes, checked = burst(app, 20, monkeypatch, spread=False)
+    assert checked == 5  # Limiter's client_free
+    assert sorted(codes) == [401] * 5 + [429] * 15
+
+
+def test_a_burst_from_many_clients_gets_only_the_overall_free_checks(
+    make_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, app = make_app(client_ip_header="x-real-ip")
+    codes, checked = burst(app, 45, monkeypatch, spread=True)
+    assert checked == 30  # Limiter's global_free
+    assert codes.count(401) == 30 and codes.count(429) == 15
 
 
 def test_many_clients_meet_the_overall_limit(make_app: Any) -> None:

@@ -411,7 +411,9 @@ def build_app(web: Web) -> ASGIApp:
         if not check_login_form_token(web.signer, form.get("token"), web.clock()):
             return login_page(request, status=400, message=lang.t("login_expired"), error=True)
         client = web.client(request)
-        wait = web.limiter.check(client)
+        # Reserved, not just checked: parallel requests count as attempts in flight, so a
+        # burst gets no more password checks than the free count.
+        wait = web.limiter.reserve(client)
         if wait > 0:
             log.warning(
                 "login refused: too many failed attempts (client %s, %.0f s left)", client, wait
@@ -431,15 +433,17 @@ def build_app(web: Web) -> ASGIApp:
             with web._verify_lock:
                 return verify_password(password, web.hash)  # type: ignore[arg-type]
 
-        ok = await run_in_threadpool(check)
+        ok = False
+        try:
+            ok = await run_in_threadpool(check)
+        finally:
+            web.limiter.finish(client, ok)
         if not ok:
-            web.limiter.failure(client)
             log.warning("failed login (client %s)", client)
             elapsed = time.monotonic() - started
             if elapsed < FAILED_LOGIN_FLOOR_S:
                 await asyncio.sleep(FAILED_LOGIN_FLOOR_S - elapsed)
             return login_page(request, status=401, message=lang.t("login_failed"), error=True)
-        web.limiter.success(client)
         _, token = web.sessions.create(web.clock())
         response = RedirectResponse(safe_next(request.query_params.get("next")), status_code=303)
         web.set_cookie(response, token)
