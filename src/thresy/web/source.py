@@ -220,8 +220,9 @@ class DbSource:
         row = self.conn.execute(
             "SELECT m.ts, m.text, r.trigger FROM messages m JOIN agent_runs r ON r.id = m.run_id"
             " WHERE m.direction = 'out' AND m.kind = 'text' AND m.text IS NOT NULL"
-            " AND (r.trigger LIKE '%%morning_briefing%%' OR r.trigger LIKE '%%post_run%%')"
-            " ORDER BY m.ts DESC, m.id DESC LIMIT 1"
+            " AND (r.trigger LIKE %s OR r.trigger LIKE %s)"
+            " ORDER BY m.ts DESC, m.id DESC LIMIT 1",
+            ("%morning_briefing%", "%post_run%"),
         ).fetchone()
         return dict(row) if row else None
 
