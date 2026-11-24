@@ -92,8 +92,10 @@ MORE_RATIO = 1.25
 MORE_M_PER_KM = 2.0
 """Climbing per km differs when the larger value is at least 1.25 times the smaller and at
 least 2 m/km more."""
+MORE_STEEP_KM = 0.2
 MORE_STEEP_POINTS = 2.0
-"""Steep uphill differs when its share of the distance differs by at least 2 points."""
+"""Steep uphill differs in total when the km differ by at least 0.2, and as a share of the
+distance when the shares differ by at least 2 points. Both are said when they disagree."""
 LIKE_LEVELS_PCT = (50.0, 70.0, 85.0)
 LIKE_WORDS = ("different", "partly alike", "alike", "very alike")
 RAMPS_NAMED = 5
@@ -509,6 +511,8 @@ def measure(
     listed = [c for c in found if c in largest]
     up, down = steepest(p)
     steep_up = stretches(p, th.steep_pct, 1)
+    ramps = short_ramps({"steep_up": steep_up})
+    ramps_km, ramps_pct = ramp_amount(ramps)
     result: dict[str, Any] = {
         "key": key,
         "label": course.label,
@@ -539,7 +543,9 @@ def measure(
         "climbs_found": len(found),
         "climb_kind": climb_kind(found, th.steep_pct),
         "steep_up": steep_up,
-        "short_ramps": len([x for x in steep_up if x["length_km"] * 1000 < SHORT_M]),
+        "short_ramps": len(ramps),
+        "short_ramps_km": ramps_km,
+        "short_ramps_grade_pct": ramps_pct,
         "steep_down": stretches(p, th.steep_pct, -1),
         "classes": classes(p, th),
         "piece_from_km": [_km(x) for x in p.edges_m[:-1]],
@@ -578,22 +584,42 @@ def short_ramps(r: dict[str, Any]) -> list[dict[str, Any]]:
     return [s for s in r["steep_up"] if s["length_km"] * 1000 < SHORT_M]
 
 
+def ramp_amount(ramps: list[dict[str, Any]]) -> tuple[float, float | None]:
+    """What ramps amount to: their total length in km and their average gradient (the gain of
+    all of them over their total length; ``None`` without ramps)."""
+    km = sum(s["length_km"] for s in ramps)
+    if km <= 0:
+        return 0.0, None
+    return round(km, 2), round(sum(s["change_m"] for s in ramps) / (km * 1000) * 100, 1)
+
+
+def ramps_words(ramps: list[dict[str, Any]]) -> str:
+    """Short steep ramps: never their number alone, always with the km they add up to and how
+    steep they are (on average, and the range of the single ramps), then where they are."""
+    km, pct = ramp_amount(ramps)
+    at = ", ".join(f"{s['from_km']:.1f}" for s in ramps[:RAMPS_NAMED])
+    if len(ramps) > RAMPS_NAMED:
+        at += f" and {len(ramps) - RAMPS_NAMED} more"
+    under = f"{SHORT_M / 1000:g} km"
+    if len(ramps) == 1:
+        return f"1 short steep ramp (under {under}): {km:.1f} km at {pct:.1f} %, at km {at}"
+    lo = min(s["grade_pct"] for s in ramps)
+    hi = max(s["grade_pct"] for s in ramps)
+    each = f"{lo:.1f} %" if lo == hi else f"{lo:.1f} to {hi:.1f} %"
+    return (
+        f"{len(ramps)} short steep ramps (each under {under}): {km:.1f} km in all at {pct:.1f} %"
+        f" on average ({each} each), at km {at}"
+    )
+
+
 def steep_words(r: dict[str, Any]) -> str | None:
-    """Where the steep uphill is: the short ramps by position, the longer steep stretches
-    with km, length and gradient."""
+    """Where the steep uphill is: the short ramps with what they amount to, the longer steep
+    stretches with km, length and gradient."""
     short = short_ramps(r)
     longer = [s for s in r["steep_up"] if s not in short]
     parts = []
     if short:
-        at = ", ".join(f"{s['from_km']:.1f}" for s in short[:RAMPS_NAMED])
-        if len(short) > RAMPS_NAMED:
-            at += f" and {len(short) - RAMPS_NAMED} more"
-        top = max(s["steepest_pct"] for s in short)
-        noun = "short steep ramp" if len(short) == 1 else "short steep ramps"
-        parts.append(
-            f"{len(short)} {noun} (under {SHORT_M / 1000:g} km, at km {at}; pieces up to "
-            f"{top:.1f} %)"
-        )
+        parts.append(ramps_words(short))
     if longer:
         named = sorted(longer, key=lambda s: -s["length_km"])[:LONG_STEEP_NAMED]
         text = ", ".join(
@@ -623,8 +649,8 @@ def climb_words(r: dict[str, Any], th: Thresholds) -> str:
 def course_words(r: dict[str, Any], th: Thresholds) -> str:
     """One line of words from one course's numbers, e.g. ``hilly (14 m up per km, 140 m over
     10.0 km); uphill 3.6 km (36 %), mostly gentle (2.9 km at 1-5 %, 0.7 km at 5 % or more); 3
-    short steep ramps (under 0.5 km, at km 1.2, 3.1, 6.0; pieces up to 8.1 %); climbs of mixed
-    length (longest 0.8 km at 4.0 %)``."""
+    short steep ramps (each under 0.5 km): 0.7 km in all at 7.2 % on average (6.1 to 8.0 %
+    each), at km 1.2, 3.1, 6.0; climbs of mixed length (longest 0.8 km at 4.0 %)``."""
     per_km = r["ascent_m_per_km"]
     parts = [
         f"{hill_word(per_km)} ({per_km:.0f} m up per km, {r['ascent_m']} m over "
@@ -662,13 +688,53 @@ def _has(r: dict[str, Any], min_climb_m: float) -> str:
     return f"no climb of {min_climb_m:g} m or more" if kind is None else CLIMB_KIND_WORDS[kind]
 
 
+def _more_less(x: float, y: float, limit: float) -> str:
+    return "more" if x - y >= limit else "less" if y - x >= limit else "about as much"
+
+
+def steep_comparison(a: dict[str, Any], b: dict[str, Any]) -> str:
+    """Steep uphill of ``b`` against ``a``, in km and as a share of the distance, and what the
+    short steep ramps of both amount to (km and average gradient, never their number)."""
+    band_a = next(x for x in a["bands"] if x["band"] == "steep_up")
+    band_b = next(x for x in b["bands"] if x["band"] == "steep_up")
+    ka, kb, sa, sb = band_a["km"], band_b["km"], band_a["share_pct"], band_b["share_pct"]
+    in_km = _more_less(kb, ka, MORE_STEEP_KM)
+    in_share = _more_less(sb, sa, MORE_STEEP_POINTS)
+    if in_km == in_share:
+        text = (
+            f"{in_km} steep uphill ({kb:.1f} vs {ka:.1f} km, {sb:.0f} vs {sa:.0f} % of the "
+            "distance)"
+        )
+    else:
+        share = {
+            "more": "more as a share of the distance",
+            "less": "less as a share of the distance",
+            "about as much": "about the same share of the distance",
+        }[in_share]
+        text = (
+            f"{in_km} steep uphill in total ({kb:.1f} vs {ka:.1f} km) but {share} ({sb:.0f} vs "
+            f"{sa:.0f} %)"
+        )
+    ra, rb = a["short_ramps_km"], b["short_ramps_km"]
+    if ra or rb:
+
+        def amount(km: float, pct: float | None) -> str:
+            return "none" if not km else f"{km:.1f} km at {pct:.1f} %"
+
+        text += (
+            f", in short steep ramps {amount(rb, b['short_ramps_grade_pct'])} vs "
+            f"{amount(ra, a['short_ramps_grade_pct'])}"
+        )
+    return text
+
+
 def comparison_words(
     a: dict[str, Any], b: dict[str, Any], overlap: float, min_climb_m: float = CLIMB_MIN_GAIN_M
 ) -> str:
     """One line comparing course ``b`` with course ``a`` (the first), e.g. ``Home against Race:
-    about as much climbing per km (9 vs 9 m), less steep uphill (0 vs 9 % of the distance),
-    short steep ramps 0 vs 5; Home has mostly long gentle climbs, Race has climbs of mixed
-    length; gradient classes 48 % alike (different)``."""
+    about as much climbing per km (9 vs 9 m), less steep uphill (0.0 vs 1.0 km, 0 vs 9 % of the
+    distance), in short steep ramps none vs 1.0 km at 6.5 %; Home has mostly long gentle climbs,
+    Race has climbs of mixed length; gradient classes 48 % alike (different)``."""
     name_a, name_b = a["label"], b["label"]
     pa, pb = a["ascent_m_per_km"], b["ascent_m_per_km"]
     nums = f"({pb:.0f} vs {pa:.0f} m)"
@@ -678,18 +744,7 @@ def comparison_words(
         climbing = f"less climbing per km {nums}"
     else:
         climbing = f"about as much climbing per km {nums}"
-    sa = next(x["share_pct"] for x in a["bands"] if x["band"] == "steep_up")
-    sb = next(x["share_pct"] for x in b["bands"] if x["band"] == "steep_up")
-    nums = f"({sb:.0f} vs {sa:.0f} % of the distance)"
-    if sb - sa >= MORE_STEEP_POINTS:
-        steep = f"more steep uphill {nums}"
-    elif sa - sb >= MORE_STEEP_POINTS:
-        steep = f"less steep uphill {nums}"
-    else:
-        steep = f"about as much steep uphill {nums}"
-    na, nb = len(short_ramps(a)), len(short_ramps(b))
-    if na or nb:
-        steep += f", short steep ramps {nb} vs {na}"
+    steep = steep_comparison(a, b)
     ka, kb = a["climb_kind"], b["climb_kind"]
     if ka == kb:
         how = f"both have {_has(a, min_climb_m)}"

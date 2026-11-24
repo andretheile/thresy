@@ -942,15 +942,18 @@ GRADES_HELP = _paragraphs(
     below 5 m up per km, "gently rolling" from 5, "hilly" from 12, "very hilly" from 25 (the
     words of coach route, here from the ascent over the pieces); the uphill km "mostly gentle"
     when under 25 % of them are steep, "partly steep" from 25 %, "mostly steep" from 50 %;
-    "short steep ramps" are steep stretches under 0.5 km (named by km), longer steep stretches
-    get km, length and gradient; the climbs are "mostly long" when climbs of 1 km or more hold
+    "short steep ramps" are steep stretches under 0.5 km, never counted alone: their number
+    comes with the km they add up to, their average gradient (gain over that length) and the
+    range of the single ramps, then where they are; longer steep stretches get km, length and
+    gradient; the climbs are "mostly long" when climbs of 1 km or more hold
     at least half of the climbing, "mostly short" when climbs under 0.5 km do, else "of mixed
     length", and "steep" rather than "gentle" when those climbs average --steep-pct or more.
     Each later course against the first: more or less climbing per km when the larger is at
-    least 1.25 times the smaller and 2 m/km more, else "about as much"; more or less steep
-    uphill when its share of the distance differs by 2 points or more; the number of short
-    steep ramps of both; likeness "very alike" from 85 %, "alike" from 70 %, "partly alike"
-    from 50 %, else "different".""",
+    least 1.25 times the smaller and 2 m/km more, else "about as much"; steep uphill in km
+    (more or less from 0.2 km) and as a share of the distance (from 2 points), both named when
+    they disagree ("less in total but more as a share"); the km and average gradient of both
+    courses' short steep ramps; likeness "very alike" from 85 %, "alike" from 70 %, "partly
+    alike" from 50 %, else "different".""",
     """--labels names the courses, comma-separated in order (default: an activity's date and
     name, a file's name). --plot writes one panel per course (a bar per piece, the same scales
     in every panel, steep shaded) and below them the distance per class, the courses side by

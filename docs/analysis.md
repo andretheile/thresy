@@ -267,16 +267,24 @@ first, built with fixed thresholds (also in `--help` and in `thresy.analysis.gra
   here);
 - the uphill km: `all of it gentle`, `mostly gentle` when under 25 % of them are steep,
   `partly steep` from 25 %, `mostly steep` from 50 %, `all of it steep`, with both km;
-- the short steep ramps with their km and the steepest piece among them; longer steep stretches
-  with km, length and gradient;
+- the short steep ramps, never as a bare count: their number together with the km they add up
+  to, their average gradient (the gain of all of them over their total length) and the range
+  of the single ramps' gradients, then their positions (`9 short steep ramps (each under
+  0.5 km): 1.3 km in all at 5.7 % on average (5.5 to 6.0 % each), at km …`). A count alone
+  misleads: many single steep pieces can outnumber a few long, steeper ramps that amount to
+  more steep running. Longer steep stretches get km, length and gradient;
 - the climbs: `mostly long` when climbs of 1 km or more hold at least half of all the climbs'
   gain, `mostly short` when climbs under 0.5 km do, otherwise `of mixed length`; `steep` when
   those climbs average the steep limit or more, else `gentle`;
 - against the first course: `more` or `less climbing per km` when the larger value is at least
-  1.25 times the smaller and 2 m/km more, otherwise `about as much`; `more` or `less steep
-  uphill` when the steep-up share of the distance differs by 2 points or more; both courses'
-  number of short steep ramps; the likeness, `very alike` from 85 %, `alike` from 70 %,
-  `partly alike` from 50 %, else `different`.
+  1.25 times the smaller and 2 m/km more, otherwise `about as much`; steep uphill in km
+  (`more` or `less` from 0.2 km) and as a share of the distance (from 2 points): one word when
+  both agree (`less steep uphill (2.0 vs 3.0 km, 10 vs 14 % of the distance)`), both when they
+  do not, as for a short course with less steep running in total but more of its distance
+  steep (`less steep uphill in total (0.6 vs 1.0 km) but more as a share of the distance (20
+  vs 10 %)`); then the short steep ramps of both as km and average gradient (`in short steep
+  ramps 1.3 km at 5.7 % vs 2.4 km at 9.0 %`), not their number; the likeness, `very alike`
+  from 85 %, `alike` from 70 %, `partly alike` from 50 %, else `different`.
 
 JSON has everything, including the gradient of every piece (`piece_from_km`,
 `piece_grade_pct`) and the likeness of every pair.

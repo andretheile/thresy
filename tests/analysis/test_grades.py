@@ -215,13 +215,66 @@ def test_ramps_against_a_long_gentle_climb() -> None:
     result = gr.compare([course(ramps, "Race"), course(long_climb, "Home")])
     race, home = result["courses"]
     assert race["short_ramps"] == 4 and home["short_ramps"] == 0
+    assert (race["short_ramps_km"], race["short_ramps_grade_pct"]) == (1.2, 7.0)
+    assert (home["short_ramps_km"], home["short_ramps_grade_pct"]) == (0.0, None)
     assert race["climb_kind"] == "short_steep" and home["climb_kind"] == "long_gentle"
-    assert "4 short steep ramps (under 0.5 km, at km 0.7, 2.0, 3.3, 4.6" in race["summary"]
+    assert (
+        "4 short steep ramps (each under 0.5 km): 1.2 km in all at 7.0 % on average (7.0 % "
+        "each), at km 0.7, 2.0, 3.3, 4.6;" in race["summary"]
+    )
     assert "all of it gentle (1-5 %); mostly long gentle climbs (longest 2.5 km" in home["summary"]
     (line,) = result["comparison"]
     assert line.startswith("Home against Race: ")
-    assert "short steep ramps 0 vs 4" in line
+    assert (
+        "less steep uphill (0.0 vs 1.2 km, 0 vs 23 % of the distance), in short steep ramps none"
+        " vs 1.2 km at 7.0 %;" in line
+    )
     assert "Home has mostly long gentle climbs, Race has mostly short steep climbs" in line
+
+
+def test_many_tiny_ramps_do_not_read_as_more_steep_running() -> None:
+    """Six 400 m ramps at 9 % against nine single steep pieces or pairs at 5.5 to 6 %: the
+    second course has more ramps but less steep running, and the words must say the latter."""
+    long_ramps = [(600, 0.0), (400, 9.0), (400, -9.0)] * 6  # 2.4 km steep of 8.4 km
+    tiny = [(100, 6.0), (300, -2.0), (400, 0.0)] * 5  # 5 x 0.1 km at 6 %
+    tiny += [(200, 5.5), (500, -2.2), (300, 0.0)] * 4  # 4 x 0.2 km at 5.5 %: 1.3 km of 8 km
+    result = gr.compare([course(long_ramps, "A"), course(tiny, "B")])
+    a, b = result["courses"]
+    assert (a["short_ramps"], a["short_ramps_km"], a["short_ramps_grade_pct"]) == (6, 2.4, 9.0)
+    assert (b["short_ramps"], b["short_ramps_km"], b["short_ramps_grade_pct"]) == (9, 1.3, 5.7)
+    assert (
+        "6 short steep ramps (each under 0.5 km): 2.4 km in all at 9.0 % on average (9.0 % "
+        "each)" in a["summary"]
+    )
+    assert (
+        "9 short steep ramps (each under 0.5 km): 1.3 km in all at 5.7 % on average (5.5 to "
+        "6.0 % each)" in b["summary"]
+    )
+    (line,) = result["comparison"]
+    assert (
+        "less steep uphill (1.3 vs 2.4 km, 16 vs 29 % of the distance), in short steep ramps "
+        "1.3 km at 5.7 % vs 2.4 km at 9.0 %;" in line
+    )
+    assert "9 vs 6" not in line and "more steep" not in line
+
+
+def test_steep_uphill_in_km_and_as_a_share_can_disagree() -> None:
+    """A short course with less steep running in total but more of its distance steep."""
+    result = gr.compare(
+        [course([(1000, 6.0), (9000, 0.0)], "long"), course([(600, 6.0), (2400, 0.0)], "short")]
+    )
+    (line,) = result["comparison"]
+    assert (
+        "short against long: more climbing per km (12 vs 6 m), less steep uphill in total (0.6 vs"
+        " 1.0 km) but more as a share of the distance (20 vs 10 %);" in line
+    )
+    same_km = gr.compare(
+        [course([(1000, 6.0), (9000, 0.0)], "x"), course([(1000, 6.0), (4000, 0.0)], "y")]
+    )
+    assert (
+        "about as much steep uphill in total (1.0 vs 1.0 km) but more as a share"
+        in (same_km["comparison"][0])
+    )
 
 
 def test_words_follow_the_thresholds() -> None:
