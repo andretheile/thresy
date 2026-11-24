@@ -139,7 +139,9 @@ closed.
   Overall, after 30 failures within an hour every client waits, likewise doubling up to 15
   minutes, so rotating addresses or a forwarded header does not get around the limit. While
   locked out the password is not checked at all, and the answer is 429 with `Retry-After`.
-  IPv6 clients are counted by their /64 network.
+  Checks still running count like failures, so a burst of parallel requests gets no more
+  password checks than the free attempts (5 per client, 30 overall), however many requests
+  it sends. IPv6 clients are counted by their /64 network.
 - **Headers on every response**, errors included: a content security policy without inline
   script or style and without other origins (`default-src 'none'; script-src 'self';
   style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri

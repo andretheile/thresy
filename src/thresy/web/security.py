@@ -231,8 +231,12 @@ class _Client:
 class Limiter:
     """Failed logins per client and overall, with growing lockouts (see the module docstring).
 
-    ``check`` before verifying a password: it returns the seconds to wait (0: go ahead).
-    ``failure`` and ``success`` record the outcome. ``clock`` is injectable for tests.
+    The login calls :meth:`reserve` before it checks a password: it returns the seconds to
+    wait (0.0: go ahead), and a granted check counts as an attempt in flight until
+    :meth:`finish` records its outcome. Attempts in flight count against the free failures
+    like failures, so a burst of parallel requests gets no more password checks than the free
+    count, per client and overall, however many requests it sends. ``check``, ``failure``
+    and ``success`` are the parts without the reservation. ``clock`` is injectable for tests.
     """
 
     def __init__(
@@ -259,6 +263,8 @@ class Limiter:
         self.clock = clock
         self._clients: OrderedDict[str, _Client] = OrderedDict()
         self._global: deque[float] = deque()
+        self._in_flight: dict[str, int] = {}
+        self._in_flight_total = 0
         self._lock = threading.Lock()
 
     def _delay(self, failures: int, free: int, cap: float) -> float:
@@ -276,22 +282,54 @@ class Limiter:
                 break
             del self._clients[key]
 
+    def _wait(self, client: str, now: float) -> float:
+        """Seconds to wait; call with the lock held."""
+        self._prune(now)
+        wait = 0.0
+        entry = self._clients.get(client)
+        failures = entry.failures if entry is not None else 0
+        if entry is not None:
+            until = entry.last + self._delay(failures, self.client_free, self.client_cap_s)
+            wait = max(wait, until - now)
+        if self._global:
+            delay = self._delay(len(self._global), self.global_free, self.global_cap_s)
+            wait = max(wait, self._global[-1] + delay - now)
+        # the free attempts are taken by checks still running: wait for their outcome
+        in_flight = self._in_flight.get(client, 0)
+        if in_flight and failures + in_flight >= self.client_free:
+            wait = max(wait, self.base_s)
+        if self._in_flight_total and len(self._global) + self._in_flight_total >= self.global_free:
+            wait = max(wait, self.base_s)
+        return max(0.0, wait)
+
     def check(self, client: str) -> float:
         """Seconds until ``client`` may try again (0.0: now)."""
-        now = self.clock()
         with self._lock:
-            self._prune(now)
-            wait = 0.0
-            entry = self._clients.get(client)
-            if entry is not None:
-                until = entry.last + self._delay(
-                    entry.failures, self.client_free, self.client_cap_s
-                )
-                wait = max(wait, until - now)
-            if self._global:
-                delay = self._delay(len(self._global), self.global_free, self.global_cap_s)
-                wait = max(wait, self._global[-1] + delay - now)
-            return max(0.0, wait)
+            return self._wait(client, self.clock())
+
+    def reserve(self, client: str) -> float:
+        """Like :meth:`check`, and when it is 0.0, count one check of ``client`` as in flight
+        (end it with :meth:`finish`)."""
+        with self._lock:
+            wait = self._wait(client, self.clock())
+            if wait == 0.0:
+                self._in_flight[client] = self._in_flight.get(client, 0) + 1
+                self._in_flight_total += 1
+            return wait
+
+    def finish(self, client: str, ok: bool) -> None:
+        """End a reserved check: record its outcome."""
+        with self._lock:
+            left = self._in_flight.get(client, 0) - 1
+            if left > 0:
+                self._in_flight[client] = left
+            else:
+                self._in_flight.pop(client, None)
+            self._in_flight_total = max(0, self._in_flight_total - 1)
+        if ok:
+            self.success(client)
+        else:
+            self.failure(client)
 
     def failure(self, client: str) -> None:
         now = self.clock()
