@@ -192,6 +192,7 @@ the client cannot forge. Name it with `COACH_WEB_CLIENT_IP_HEADER`:
 |---|---|
 | Traefik (or nginx, Caddy) facing the clients | `X-Forwarded-For`, hops `1`. The proxy appends the address it saw as the last entry; whatever a client puts in front of it is ignored. |
 | A CDN in front of Traefik, and Traefik trusts the CDN's addresses (`forwardedHeaders.trustedIPs`) | `X-Forwarded-For`, hops `2`: the CDN appends the client, Traefik appends the CDN. |
+| A CDN in front of a reverse proxy that trusts no forwarded headers (Traefik's default) | `X-Forwarded-For`, hops `1`. The proxy replaces whatever arrives with the address it saw, which is the CDN's edge server: coarse, since many visitors share an edge, but it cannot be forged. Do not name the CDN's own client header (such as `CF-Connecting-IP`) here: the origin can still be reached around the CDN, and such a request sets that header to anything. |
 | Cloudflare in front, and the origin accepts connections from Cloudflare only | `CF-Connecting-IP`. Only safe when nobody can reach the origin around Cloudflare: a request that bypasses it can set the header to anything. |
 | Unsure | Leave it unset. Every request then counts as coming from the proxy: the per-client limit acts as a second overall limit, which is safe but stricter. |
 
