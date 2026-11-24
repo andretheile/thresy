@@ -32,7 +32,7 @@ them.
 - **`AGENTS.md`** is in the context of every run on every harness (Claude Code through the
   `CLAUDE.md` import, Codex and Cursor natively). Its length is paid on every run, so it holds
   only what every run needs: the situation, how the coach knows things, the judgment calls that
-  go wrong, how it talks, the bridge mechanics, memory and limits (about 2,350 words now). It
+  go wrong, how it talks, the bridge mechanics, memory and limits (about 2,370 words now). It
   explains reasons rather than issuing bare rules, so the coach can apply them to cases they do
   not name.
 - **Playbooks** are read when a prompt names one (`Follow playbooks/chat.md.`) or when the brief

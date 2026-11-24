@@ -4,6 +4,7 @@
 
 - **Check the facts** where you can read the web: date, start time, distance, ascent, course and surface, entry status and cut-offs, on the organiser's page. Enter the race with `coach races add` (with `--url`, and `--status maybe` while undecided). If what you found differs from what the athlete said (another date, another distance), say so before you plan around it.
 - **Priority:** A (the goal), B (important, trained through), C (training race). Write why into `memory/goals.md`.
+- **The course against the training courses:** with the organiser's GPX (or an earlier run of the course), run `coach analysis grades <race course> <training runs or routes>`, race course first. Put the hill work on the training course most like it, or on one with the same kind of steep stretches if none is close, and plan effort for the steep stretches it lists by km; say when the race is clearly hillier or flatter than anything the athlete trains on.
 
 ## An extra race in a full calendar
 
