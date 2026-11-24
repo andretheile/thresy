@@ -3,8 +3,8 @@
 `coach analysis …` turns the per-second records, laps and wellness data in Postgres into the
 numbers a coach needs: splits, interval reps, segment histories, course comparisons, the
 gradients of courses, heart-rate plausibility, the HRV curve of a night, wellness trends and
-weekly volume. The commands are thin wrappers around library functions in `thresy.analysis` that work on pandas frames, so an
-agent can also import them for questions no command covers.
+weekly volume. The commands are thin wrappers around library functions in `thresy.analysis`
+that work on pandas frames, so an agent can also import them for questions no command covers.
 
 Conventions shared by every command:
 
@@ -415,10 +415,10 @@ docstring of `thresy.analysis.data` defines them.
   joins the course late is compared on the common part only. Altitude for the course comes from
   the reference run.
 - Gradients over 100 m pieces smooth out what is shorter: a 50 m ramp at 15 % shows as a
-  piece of at most 7.5 %, less when it straddles two pieces. Use `--bin-m 50` to look closer, at the price of more noise from the
-  altitude. Watch altitude and a file's elevation differ in detail (see `grades`), and a
-  watch's barometer drifts in changing weather, so two runs of the same course differ by a few
-  percent in ascent.
+  piece of at most 7.5 %, less when it straddles two pieces. `--bin-m 50` looks closer, at the
+  price of more noise from the altitude. Watch altitude and a file's elevation differ in detail
+  (see `grades`), and a watch's barometer drifts in changing weather, so two runs of the same
+  course differ by a few percent in ascent.
 - Segment matching follows the old matcher closely, including its equirectangular distance and
   wall-clock durations, so efforts with a watch pause inside are longer than the timer time.
 - The night analysis depends on Garmin's HRV readings, which are missing on some nights.

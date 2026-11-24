@@ -16,14 +16,15 @@ for instance) can call it with a course of its own:
 * **Bands** (:func:`bands`): steep down (at most -``steep_pct``), gentle down, flat (below
   ``flat_pct`` either way), gentle up, steep up (at least ``steep_pct``); defaults 1 % and 5 %.
 * **Classes** (:func:`classes`): ``class_pct`` wide (default 2) and centred on 0, ±2, ±4 …, so
-  the class around 0 is the flat band; the outermost classes collect everything beyond
+  with the defaults the class around 0 is the flat band; the outer classes collect all beyond
   ``class_limit_pct`` minus half a class (±9 % by default).
 * **Climbs** (:func:`climbs`): the altitude at the piece edges is cut at its turning points
   (:func:`thresy.analysis.activity.turning_points`: a climb ends once the altitude has fallen
   :data:`CLIMB_REVERSAL_M` below its top, so a short dip does not split a long climb); pieces
   below the flat limit at either end are trimmed off. A climb counts with at least
   ``min_gain_m`` (default 10 m) and an average gradient of at least the flat limit.
-* **Steep stretches** (:func:`stretches`): runs of consecutive steep pieces, up or down.
+* **Steep stretches** (:func:`stretches`): runs of consecutive steep pieces, up or down; uphill
+  ones shorter than :data:`SHORT_M` are the "short steep ramps".
 * **Likeness** (:func:`overlap_pct`): the overlap of two courses' distributions of distance
   over the classes, each as a share of its own length: the sum over the classes of the
   smaller share. 100 % means the same share of each course in every class, 0 % that no class
@@ -754,10 +755,10 @@ def mixed_sources_note(results: list[dict[str, Any]]) -> str:
 
     return (
         f"elevation measured differently: {keys('file')} from a file, {keys('watch')} from a "
-        "watch. A planned route's elevation comes from a terrain model, which misses short "
-        "ramps and can show steps at bridges; a watch's barometer is smooth but drifts with the "
-        "weather. Compare the bands and classes; single steep pieces and a few percent of ascent "
-        "can differ for that reason alone"
+        "watch. A planned route's elevation usually comes from a terrain model, which misses "
+        "short ramps and can show steps at bridges; a watch's barometer is smooth but drifts "
+        "with the weather. Compare the bands and classes; single steep pieces and a few percent "
+        "of ascent can differ for that reason alone"
     )
 
 
