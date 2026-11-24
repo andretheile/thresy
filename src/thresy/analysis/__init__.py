@@ -10,6 +10,8 @@ Modules (each usable from Python without the CLI):
   comparison of sessions of the same kind.
 * :mod:`~thresy.analysis.segments`: fixed segments (start and end point), efforts, history.
 * :mod:`~thresy.analysis.route`: two activities on the same course aligned by position.
+* :mod:`~thresy.analysis.grades`: how hilly a course is (an activity or a GPX file): gradients
+  of fixed-length pieces, bands, classes, climbs, and the comparison of several courses.
 * :mod:`~thresy.analysis.sensor`: heart-rate plausibility (cadence lock, jumps, spikes).
 * :mod:`~thresy.analysis.night`: sleep stages and the HRV readings of one night.
 * :mod:`~thresy.analysis.wellness`: HRV, resting heart rate and sleep over N days.

@@ -45,6 +45,7 @@ The commands (`coach <command> --help` explains every option and number; read it
 | `coach analysis wellness --days 28` | HRV against its range, resting heart rate, sleep, per wake date |
 | `coach analysis weeks --weeks 12` | weekly volume, longest run, year to date |
 | `coach analysis segments`, `coach analysis route` | fixed climbs over time; two runs on the same course |
+| `coach analysis grades A B` | hills and steep stretches of runs or GPX files (a race course), side by side |
 | `coach plan show` | this week (or `next`, `last`, a date): plan next to what was run; also `add`, `change`, `move`, `done`, `skip`, `link` |
 | `coach races list` | races with goals and results; also `add`, `change`, `result` |
 | `coach weather` | forecast, daily and hourly, for the athlete's home or a named place; past days too |

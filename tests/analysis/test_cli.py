@@ -80,6 +80,7 @@ def test_help_is_a_map_of_the_commands() -> None:
         "weeks",
         "segments",
         "route",
+        "grades",
     ):
         assert name in out
     assert "--json" in out and "COACH_WORKSPACE_DIR/out" in out

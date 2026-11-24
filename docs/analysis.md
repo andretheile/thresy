@@ -1,10 +1,10 @@
 # Analysis
 
 `coach analysis …` turns the per-second records, laps and wellness data in Postgres into the
-numbers a coach needs: splits, interval reps, segment histories, course comparisons, heart-rate
-plausibility, the HRV curve of a night, wellness trends and weekly volume. The commands are
-thin wrappers around library functions in `thresy.analysis` that work on pandas frames, so an
-agent can also import them for questions no command covers.
+numbers a coach needs: splits, interval reps, segment histories, course comparisons, the
+gradients of courses, heart-rate plausibility, the HRV curve of a night, wellness trends and
+weekly volume. The commands are thin wrappers around library functions in `thresy.analysis`
+that work on pandas frames, so an agent can also import them for questions no command covers.
 
 Conventions shared by every command:
 
@@ -185,6 +185,110 @@ totals, heart rate and stopped time of both, a per-section table (`--step-m`, de
 with the course's ascent, both times, the difference and the cumulative difference, the climbs
 on the course (from A's altitude) with both times, and the sections where B lost the most.
 
+### `grades`
+
+```sh
+coach analysis grades out/race.gpx 123456 last           # a race course against two runs
+coach analysis grades 123456@3-20.1 inbox/2030-03-04/route.gpx --labels Race,Planned --plot
+coach analysis grades race.gpx 2030-05-01 --share --plot --json
+```
+
+How hilly is a course, and how does it climb? It answers questions such as "is the race course
+hillier than my long-run loop?" or "which of my courses is most like the race?" from the
+gradient of every 100 m piece, for one to four courses side by side. A course is an activity
+(an id, a date or `last`, as everywhere) or a GPX file: a route from `coach route`, a file the
+athlete sent, a race course from the organiser. `@FROM-TO` (km) cuts a course to a stretch;
+either end may be left out (`last@5-`). The first course is the reference: every later one is
+compared with it.
+
+**Method.** Each course is cut into pieces of `--bin-m` (default 100 m) from the start of its
+stretch; a last piece shorter than half a piece is dropped. The altitude at a piece's edge is
+the altitude where the distance first reaches that edge, so standing still and watch pauses
+create no piece and no gradient. Gradient = altitude change over the piece / its length, rounded
+to 0.1 % before it is classed, so a piece shown as 5.0 % counts as steep.
+
+- **Activities** use the watch's distance and its altitude smoothed like everywhere in the
+  analysis (centred mean over 15 samples, about 45 m at running pace).
+- **GPX files** have positions and elevation but no per-second samples. The distance is the
+  path length along the positions (repeated points dropped). The elevation is resampled every
+  10 m along that distance and smoothed with a centred mean over 70 m, narrowing near both
+  ends so the window stays centred (a straight slope stays straight to the last point). Points
+  in a file are spaced by distance, often unevenly (a router puts few points on a straight
+  road), so the smoothing works on distance, not on point counts. A route's elevation usually
+  comes from a terrain model sampled every 30 m or so, which arrives as small steps and spikes
+  at bridges and embankments; 70 m removes those without flattening a 100 m ramp much, is about
+  the distance the watch's 15 s cover, and is the window `coach route` uses for its ascent, so
+  both commands see a file the same way. A file without elevation is refused; points without
+  elevation inside a file are interpolated and counted in the output.
+
+The output names each course's elevation source. When both kinds are compared it adds a note:
+watch altitude (barometric, smooth, drifting with the weather) and a terrain model (misses
+short ramps, steps at bridges) differ in detail, so compare the bands and classes, not single
+pieces, and expect a few percent of difference in ascent from that alone.
+
+**Numbers per course.**
+
+- Ascent and descent summed over the pieces. Ups and downs inside one piece cancel, so this is
+  lower than the watch's own total, which an activity also shows (Garmin's figure for the whole
+  activity, even when a stretch was asked for). Ascent per km is the sum over the length.
+- Five **bands**, in km and in % of the course's length (courses differ in length): steep
+  down (≤ −`--steep-pct`), gentle down, flat (below `--flat-pct` either way), gentle up, steep
+  up (≥ `--steep-pct`); defaults 1 % and 5 %. Uphill km = gentle up + steep up.
+- **Classes** `--class-pct` wide (default 2 %), centred on 0, ±2, ±4 …: the class around 0 is
+  −1 to +1, the flat band. A gradient of exactly +1 % belongs to the class above, −1 % to the
+  one below, symmetrically. The outermost classes collect everything beyond `--class-limit`
+  minus half a class (with the defaults: from 9 % either way). The text leaves out empty outer
+  classes; JSON has all of them.
+- The **steepest piece** up and down with its km.
+- **Climbs.** The altitude at the piece edges is cut at its turning points with the zigzag of
+  `activity` (`thresy.analysis.activity.turning_points`), but with 5 m instead of 10 m: a climb
+  ends once the altitude has fallen 5 m below its top, so a short dip does not split a long
+  climb while the small rollers this command should tell apart stay separate. Pieces below the
+  flat limit at either end are trimmed off. A climb counts with at least `--min-climb-m`
+  (default 10 m) gain and an average gradient of at least the flat limit. Listed: km from and
+  to, length, gain, average gradient and steepest piece; the text shows the `--climbs`
+  (default 5) largest by gain, in course order; `climbs_found` counts all.
+- **Steep stretches**: runs of consecutive steep pieces, up and down, with km, length, average
+  and steepest piece. Those shorter than 500 m are the **short steep ramps**.
+
+**Likeness of two courses** is the overlap of their distributions of distance over the classes,
+each as a share of its own length: the sum over the classes of the smaller of the two shares,
+0 to 100 %. 100 % means the same mix of gradients (not the same order along the course); 0 %
+means no class holds distance of both, as between a course that only climbs and one that only
+descends. It depends on the class width: with narrow classes, two courses at 2.9 % and 3.1 %
+can fall into different classes.
+
+**Words.** Ahead of the numbers, one line per course and one per later course against the
+first, built with fixed thresholds (also in `--help` and in `thresy.analysis.grades`):
+
+- hilliness from ascent per km over the pieces: `flat` below 5 m, `gently rolling` from 5,
+  `hilly` from 12, `very hilly` from 25 (the words and limits of `coach route`, which computes
+  its ascent with a dead band instead, so a course near a limit can get the next lower word
+  here);
+- the uphill km: `all of it gentle`, `mostly gentle` when under 25 % of them are steep,
+  `partly steep` from 25 %, `mostly steep` from 50 %, `all of it steep`, with both km;
+- the short steep ramps with their km and the steepest piece among them; longer steep stretches
+  with km, length and gradient;
+- the climbs: `mostly long` when climbs of 1 km or more hold at least half of all the climbs'
+  gain, `mostly short` when climbs under 0.5 km do, otherwise `of mixed length`; `steep` when
+  those climbs average the steep limit or more, else `gentle`;
+- against the first course: `more` or `less climbing per km` when the larger value is at least
+  1.25 times the smaller and 2 m/km more, otherwise `about as much`; `more` or `less steep
+  uphill` when the steep-up share of the distance differs by 2 points or more; both courses'
+  number of short steep ramps; the likeness, `very alike` from 85 %, `alike` from 70 %,
+  `partly alike` from 50 %, else `different`.
+
+JSON has everything, including the gradient of every piece (`piece_from_km`,
+`piece_grade_pct`) and the likeness of every pair.
+
+The plot shows one panel per course with a bar per piece (gradient along the course km; every
+panel the same gradient range and the same km per inch; steep gradients shaded), and below them
+the distance per class, the courses side by side in the same colours. `--share` shows that
+panel in % of each course's length, which compares courses of different length fairly.
+
+The functions work on distance and altitude arrays (`grades.cut`, `grades.measure`,
+`grades.compare`), so other code can measure a course it has in hand, such as a planned route.
+
 ### `segments`
 
 ```sh
@@ -310,6 +414,11 @@ docstring of `thresy.analysis.data` defines them.
 - Route comparison needs both runs to follow the same course closely (within 40 m); a run that
   joins the course late is compared on the common part only. Altitude for the course comes from
   the reference run.
+- Gradients over 100 m pieces smooth out what is shorter: a 50 m ramp at 15 % shows as a
+  piece of at most 7.5 %, less when it straddles two pieces. `--bin-m 50` looks closer, at the
+  price of more noise from the altitude. Watch altitude and a file's elevation differ in detail
+  (see `grades`), and a watch's barometer drifts in changing weather, so two runs of the same
+  course differ by a few percent in ascent.
 - Segment matching follows the old matcher closely, including its equirectangular distance and
   wall-clock durations, so efforts with a watch pause inside are longer than the timer time.
 - The night analysis depends on Garmin's HRV readings, which are missing on some nights.
