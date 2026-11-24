@@ -9,7 +9,7 @@
 # join an egress network to reach Garmin, Telegram, the model provider and the backup bucket.
 # Every service has a memory limit because the host is shared and has no swap; the defaults
 # add up to about 2.7 GB (db 512m, sync 384m, bridge 1536m, backup 256m; migrate 256m only
-# while it runs).
+# while it runs), plus 256m for the optional web dashboard (profile web, docs/web.md).
 #
 # Least privilege: there is no env_file. .env is only read by Compose to fill in the values
 # below, and each service lists exactly the variables it gets. Garmin credentials and tokens
@@ -261,6 +261,43 @@ services:
       # The bucket's create-only service-account key; /dev/null (no key) when unset.
       - ${COACH_BACKUP_GCS_KEY_FILE:-/dev/null}:/run/secrets/gcs-backup-key.json:ro
     mem_limit: ${BACKUP_MEM_LIMIT:-256m}
+
+  # The web dashboard (docs/web.md). Optional: it starts only with the Compose profile `web`
+  # (COMPOSE_PROFILES=web in .env). It reads the database with the read-only role and gets
+  # nothing else: no other credential, no volume, no egress network, no capabilities, a
+  # read-only file system. It publishes no port; the deployment's reverse proxy reaches it on
+  # port 8080 through an override file (compose.traefik.example.yml shows one for Traefik).
+  # Without COACH_WEB_PASSWORD_HASH and COACH_WEB_SECRET it refuses to start.
+  web:
+    <<: *app
+    profiles: [web]
+    command: ["coach", "web", "run"]
+    networks: [backend]
+    read_only: true
+    tmpfs: [/tmp]
+    stop_grace_period: 10s
+    environment:
+      COACH_DATABASE_URL_RO: *ro-url
+      COACH_TZ: ${COACH_TZ:-UTC}
+      COACH_LANGUAGE: ${COACH_LANGUAGE:-en}
+      COACH_NAME: ${COACH_NAME:-Thresy}
+      COACH_WEB_PASSWORD_HASH:
+      COACH_WEB_SECRET:
+      # Optional (docs/web.md), passed only when set in .env.
+      COACH_WEB_SESSION_HOURS:
+      COACH_WEB_CLIENT_IP_HEADER:
+      COACH_WEB_CLIENT_IP_HOPS:
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: ${WEB_MEM_LIMIT:-256m}
 
 networks:
   backend:
