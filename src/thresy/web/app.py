@@ -521,7 +521,9 @@ def build_app(web: Web) -> ASGIApp:
     )
     app.state.web = web
     gated = AuthGate(app, web)
-    return SecurityHeaders(gated, hsts=web.secure and not web.demo)
+    outer = SecurityHeaders(gated, hsts=web.secure and not web.demo)
+    outer.starlette = app  # type: ignore[attr-defined]  # the routes, for the tests
+    return outer
 
 
 def _is_db_error(exc: BaseException) -> bool:

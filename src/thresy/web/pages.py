@@ -164,9 +164,9 @@ def render_markdown(text: str) -> str:
 
     md = MarkdownIt("commonmark", {"html": False, "linkify": False}).disable("image")
 
-    def link_open(tokens: Any, idx: int, options: Any, env: Any) -> str:
+    def link_open(renderer: Any, tokens: Any, idx: int, options: Any, env: Any) -> str:
         tokens[idx].attrSet("rel", "noopener noreferrer nofollow")
-        return md.renderer.renderToken(tokens, idx, options, env)
+        return renderer.renderToken(tokens, idx, options, env)
 
     md.add_render_rule("link_open", link_open)
     return md.render(text)

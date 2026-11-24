@@ -499,9 +499,9 @@ def _activity_row(
             "race": 171, "recovery": 128,
         }.get(spec.kind, 137) + rng.uniform(-3, 3)  # fmt: skip
         summary = {
-            "distance_m": round(spec.distance_m, 1),
-            "duration_s": round(moving + rng.uniform(5, 25), 1),
-            "moving_s": round(moving, 1),
+            "distance_m": float(round(spec.distance_m)),
+            "duration_s": float(round(moving + rng.uniform(5, 25))),
+            "moving_s": float(round(moving)),
             "avg_hr": round(avg_hr),
             "max_hr": round(
                 avg_hr + {"intervals": 22, "threshold": 17, "race": 13}.get(spec.kind, 11)
@@ -545,9 +545,9 @@ def _summary_from_records(df: pd.DataFrame) -> dict[str, Any]:
     up, down = ascent_descent(smooth_altitude(p))
     moving_cad = df.loc[df["speed_mps"] > 1.0, "cadence_spm"]
     return {
-        "distance_m": round(float(df["dist_m"].iloc[-1]), 1),
-        "duration_s": round(timer + 1, 1),
-        "moving_s": round(timer + 1 - standing, 1),
+        "distance_m": float(round(df["dist_m"].iloc[-1])),
+        "duration_s": float(round(timer + 1)),
+        "moving_s": float(round(timer + 1 - standing)),
         "avg_hr": round(float(df["hr"].mean())),
         "max_hr": float(df["hr"].max()),
         "elev_gain_m": round(up),
@@ -645,9 +645,9 @@ def _other_activity(activity_id: int, day: date, name: str, rng: random.Random) 
         "type": "road_biking",
         "is_run": False,
         "name": name,
-        "distance_m": round(duration * 7.1, 1),
-        "duration_s": round(duration, 1),
-        "moving_s": round(duration - 120, 1),
+        "distance_m": float(round(duration * 7.1)),
+        "duration_s": float(round(duration)),
+        "moving_s": float(round(duration - 120)),
         "elapsed_s": round(duration + 300, 1),
         "avg_hr": 124.0,
         "max_hr": 151.0,
