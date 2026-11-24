@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime, timedelta
@@ -491,6 +492,39 @@ def test_year_labels_touch_no_line_and_no_label(
                 assert not charts.circle_hits_box(cx, cy, r, label.box)
         for other in labels:
             assert other is label or not charts.boxes_overlap(label.box, other.box)
+
+
+def test_km_marks_that_would_collide_are_left_out() -> None:
+    ends = [(0.0, 0.0), (0.0, 0.0)]  # out and back: start and finish at home
+    out_and_back = [(30.0 * k, 0.0) if k <= 4 else (30.0 * (8 - k), 0.0) for k in range(1, 8)]
+    kept = charts.placed_marks([(x, y, k) for k, (x, y) in enumerate(out_and_back, 1)], ends)
+    assert [n for _, _, n in kept] == [1, 2, 3, 4]  # 5, 6 and 7 sit on 3, 2 and 1
+    near_start = charts.placed_marks([(5.0, 0.0, 1), (40.0, 0.0, 2)], ends)
+    assert [n for _, _, n in near_start] == [2]
+
+
+def mark_centres(svg: str) -> list[tuple[float, float]]:
+    return [
+        (float(x), float(y))
+        for x, y in re.findall(r'<circle class="km-mark" cx="([\d.]+)" cy="([\d.]+)"', svg)
+    ]
+
+
+def test_tracks_that_cross_themselves_have_no_overlapping_marks(full: DemoSource) -> None:
+    crossing = [
+        a
+        for a in full.runs()
+        if a.has_records and full.data.specs[a.id].template in ("park", "outback")
+    ]
+    assert {full.data.specs[a.id].template for a in crossing} == {"park", "outback"}
+    for run in crossing:
+        pair = pages.run_page(full, EN, run.id)["track"]
+        for svg in (str(pair.narrow), str(pair.wide)):
+            centres = mark_centres(svg)
+            assert centres, run.id
+            for i, (x1, y1) in enumerate(centres):
+                for x2, y2 in centres[i + 1 :]:
+                    assert math.hypot(x1 - x2, y1 - y2) >= 2 * charts.KM_MARK_R, run.id
 
 
 def test_chart_text_is_escaped() -> None:

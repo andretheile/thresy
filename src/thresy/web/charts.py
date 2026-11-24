@@ -761,15 +761,40 @@ def track(
     xy = [P(a, b) for a, b in pts]
     svg.path(_poly(xy), "route-halo")
     svg.path(_poly(xy), "route")
-    for la, lo, n in km_marks:
-        x, y = P(la, lo)
-        svg.circle(x, y, 7.5, "km-mark")
-        svg.text(x, y + 3.5, str(n), "km-num", "middle")
     sx0, sy0 = xy[0]
     ex, ey = xy[-1]
+    for x, y, n in placed_marks(
+        [(*P(la, lo), n) for la, lo, n in km_marks], [(sx0, sy0), (ex, ey)]
+    ):
+        svg.circle(x, y, KM_MARK_R, "km-mark")
+        svg.text(x, y + 3.5, str(n), "km-num", "middle")
     svg.circle(ex, ey, 6, "finish")
     svg.circle(sx0, sy0, 6, "start")
     return svg.render()
+
+
+KM_MARK_R = 7.5
+END_MARK_R = 6.0
+MARK_GAP = 2.0
+
+
+def placed_marks(
+    marks: Sequence[tuple[float, float, int]], ends: Sequence[tuple[float, float]]
+) -> list[tuple[float, float, int]]:
+    """The kilometre marks that fit: in order, each one only where it keeps clear of the
+    start, the finish and every mark already placed. Where a route runs over itself (laps,
+    out and back) the later marks would sit on the earlier ones; they are left out."""
+    kept: list[tuple[float, float, int]] = []
+    for x, y, n in marks:
+        clear_of_ends = all(
+            math.hypot(x - ex, y - ey) >= KM_MARK_R + END_MARK_R + MARK_GAP for ex, ey in ends
+        )
+        clear_of_marks = all(
+            math.hypot(x - kx, y - ky) >= 2 * KM_MARK_R + MARK_GAP for kx, ky, _ in kept
+        )
+        if clear_of_ends and clear_of_marks:
+            kept.append((x, y, n))
+    return kept
 
 
 def profile(

@@ -170,6 +170,32 @@ def route_xy(template: Template, length_m: float, n: int = 1500) -> tuple[np.nda
     return x * scale, y * scale
 
 
+PARK_LAP_M = 1500.0
+"""The interval sessions run laps of a small loop in the park, so the track crosses itself."""
+
+
+def route_points(template: str, length_m: float) -> tuple[np.ndarray, np.ndarray]:
+    """Points of a run's route: laps of the park loop, out and back along the valley road,
+    or one loop of a template scaled to the distance."""
+    if template == "park":
+        lap_x, lap_y = route_xy(TEMPLATES["park"], PARK_LAP_M, n=600)
+        laps = max(1, math.ceil(length_m / PARK_LAP_M))
+        # a lap ends where it starts: drop the repeated point so the distance keeps growing
+        x = np.r_[np.tile(lap_x[:-1], laps), lap_x[-1]]
+        y = np.r_[np.tile(lap_y[:-1], laps), lap_y[-1]]
+        return x, y
+    if template == "outback":
+        half = length_m / 2
+        s = np.linspace(0, half, 800)
+        x = s * 0.92
+        y = 140 * np.sin(s / 650) + 60 * np.sin(s / 230)
+        seg = np.hypot(np.diff(x), np.diff(y)).sum()
+        x, y = x * half / seg, y * half / seg
+        # back along the same road, on its other side
+        return np.r_[x, x[::-1]], np.r_[y, y[::-1] - 4]
+    return route_xy(TEMPLATES[template], length_m)
+
+
 # -- sessions --------------------------------------------------------------------------------------
 
 
@@ -253,7 +279,7 @@ def _phases(spec: RunSpec) -> list[tuple[str, str, float, float]]:
 def simulate(spec: RunSpec) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """Per-second records (the columns of ``activity_records``) and laps of one run."""
     rng = np.random.default_rng(spec.seed)
-    x_r, y_r = route_xy(TEMPLATES[spec.template], spec.distance_m)
+    x_r, y_r = route_points(spec.template, spec.distance_m)
     seg = np.hypot(np.diff(x_r), np.diff(y_r))
     cum = np.r_[0.0, np.cumsum(seg)]
     alt_r = terrain(x_r, y_r)
@@ -473,7 +499,7 @@ TEMPLATE_FOR = {
     "tempo": "river",
     "easy": None,
     "easy_strides": "town",
-    "recovery": "town",
+    "recovery": "outback",
     "long": "ridge",
     "long_fast": "river",
     "race": "town",
@@ -496,7 +522,9 @@ def _activity_row(
             "recovery": v["recovery"],
         }.get(spec.kind, v["easy"])
         moving = spec.distance_m / speed * rng.uniform(0.98, 1.03)
-        hilly = {"hills": 16, "ridge": 13, "town": 9, "river": 5, "park": 4}[spec.template]
+        hilly = {"hills": 16, "ridge": 13, "town": 9, "river": 5, "park": 4, "outback": 7}[
+            spec.template
+        ]
         avg_hr = {
             "threshold": 152, "intervals": 150, "tempo": 154, "long": 141, "long_fast": 146,
             "race": 171, "recovery": 128,
@@ -607,6 +635,8 @@ def _build_runs(
             template = TEMPLATE_FOR[kind] or rng.choice(["river", "hills", "town", "hills"])
             if kind in ("long", "long_fast") and rng.random() < 0.4:
                 template = "hills"
+            if template == "town" and day.weekday() == 5:
+                template = "outback"  # Saturdays out and back along the valley road
             spec = RunSpec(
                 id=next_id,
                 start_utc=_start_time(day, kind, rng),
