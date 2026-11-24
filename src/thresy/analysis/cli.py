@@ -897,6 +897,166 @@ def route_compare(
     _out(result, json_out, text)
 
 
+# grades ---------------------------------------------------------------------------------------
+
+
+def _paragraphs(*paragraphs: str) -> str:
+    """One line per paragraph, so the terminal wraps it cleanly. No square brackets: the help
+    renderer would read them as markup."""
+    return "\n\n".join(" ".join(p.split()) for p in paragraphs)
+
+
+GRADES_HELP = _paragraphs(
+    """How hilly a course is and how it climbs, from the gradient of every 100 m piece; up to
+    four runs or GPX files side by side.""",
+    """For example a race course from the organiser against the athlete's training courses:
+    the distance per gradient band and class, the climbs, where the steep stretches are, and how
+    alike the courses are.""",
+    """COURSE is an activity (an id, a date YYYY-MM-DD for that day's longest run, or last) or
+    a GPX file (a route from coach route, a file the athlete sent under inbox/, a race course
+    from the organiser's site). Append @FROM-TO in km for a stretch: 123456@3-20.1, race.gpx@0-10,
+    last@5- (km 5 to the end). Give 1 to 4 courses; every later one is compared with the first.
+    A file without elevation is refused.""",
+    """Method: each course is cut into pieces of --bin-m metres from the start of its stretch; a
+    last piece shorter than half of that is dropped. The altitude at a piece's edge is taken
+    where the distance first reaches it, so stops and watch pauses add nothing. Gradient =
+    altitude change / length, rounded to 0.1 %. An activity uses the watch's distance and its
+    altitude smoothed over 15 s; a file the distance along its positions and its elevation
+    resampled every 10 m and smoothed over 70 m (as coach route). The output names the source
+    per course: watch and file elevation differ in detail, so across sources compare the bands
+    and classes, not single pieces.""",
+    """Numbers: ascent and descent summed over the pieces (ups and downs inside a piece cancel,
+    so this is lower than the watch's own total, which an activity shows for the whole run).
+    Five bands, in km and % of each course's length: steep down, gentle down, flat (below
+    --flat-pct either way), gentle up, steep up (from --steep-pct). Classes --class-pct wide,
+    centred on 0, the outer ones collecting everything beyond --class-limit minus half a class
+    (with the defaults: below -9 % and from +9 %). The steepest piece up and down. Climbs: the
+    altitude at the piece edges cut at its turning points, a climb ending once it has fallen 5 m
+    below its top (a short dip does not split it), flat pieces at either end trimmed; listed with
+    at least --min-climb-m gain and an average of at least --flat-pct: km, length, gain, average
+    and steepest piece, the --climbs largest. Steep stretches: consecutive steep pieces, up and
+    down. Likeness of two courses: the overlap of their distributions of distance over the
+    classes, each as a share of its own length (the sum over the classes of the smaller share):
+    100 % = the same mix of gradients, 0 % = no class in common.""",
+    """The words come first, built from the numbers with fixed thresholds. Per course: "flat"
+    below 5 m up per km, "gently rolling" from 5, "hilly" from 12, "very hilly" from 25 (the
+    words of coach route, here from the ascent over the pieces); the uphill km "mostly gentle"
+    when under 25 % of them are steep, "partly steep" from 25 %, "mostly steep" from 50 %;
+    "short steep ramps" are steep stretches under 0.5 km (named by km), longer steep stretches
+    get km, length and gradient; the climbs are "mostly long" when climbs of 1 km or more hold
+    at least half of the climbing, "mostly short" when climbs under 0.5 km do, else "of mixed
+    length", and "steep" rather than "gentle" when those climbs average --steep-pct or more.
+    Each later course against the first: more or less climbing per km when the larger is at
+    least 1.25 times the smaller and 2 m/km more, else "about as much"; more or less steep
+    uphill when its share of the distance differs by 2 points or more; the number of short
+    steep ramps of both; likeness "very alike" from 85 %, "alike" from 70 %, "partly alike"
+    from 50 %, else "different".""",
+    """--labels names the courses, comma-separated in order (default: an activity's date and
+    name, a file's name). --plot writes one panel per course (a bar per piece, the same scales
+    in every panel, steep shaded) and below them the distance per class, the courses side by
+    side; --share shows that panel in % of each course's length, better when lengths
+    differ.""",
+)
+
+
+@app.command("grades", help=GRADES_HELP)
+def grades_cmd(
+    courses: Annotated[
+        list[str],
+        typer.Argument(
+            metavar="COURSE",
+            help="1 to 4: an activity (id, date, last) or a GPX file, each optionally @FROM-TO km.",
+            show_default=False,
+        ),
+    ],
+    labels: Annotated[
+        str | None,
+        typer.Option("--labels", help="Names for the courses, comma-separated, in order."),
+    ] = None,
+    bin_m: Annotated[float, typer.Option("--bin-m", help="Piece length in metres.")] = 100,
+    flat_pct: Annotated[
+        float, typer.Option("--flat-pct", help="Below this gradient (either way) a piece is flat.")
+    ] = 1.0,
+    steep_pct: Annotated[
+        float, typer.Option("--steep-pct", help="From this gradient (either way) it is steep.")
+    ] = 5.0,
+    class_pct: Annotated[
+        float, typer.Option("--class-pct", help="Width of the gradient classes in %.")
+    ] = 2.0,
+    class_limit: Annotated[
+        float,
+        typer.Option("--class-limit", help="The outer classes start half a class below this %."),
+    ] = 10.0,
+    min_climb_m: Annotated[
+        float, typer.Option("--min-climb-m", help="Smallest climb listed (gain, m).")
+    ] = 10.0,
+    n_climbs: Annotated[
+        int, typer.Option("--climbs", help="Climbs listed per course (the largest by gain).")
+    ] = 5,
+    plot: PlotOption = False,
+    share: Annotated[
+        bool, typer.Option("--share", help="Plot the classes in % of each course's length.")
+    ] = False,
+    json_out: JsonOption = False,
+) -> None:
+    from contextlib import nullcontext
+
+    from thresy.analysis import grades as gr
+    from thresy.analysis.data import AnalysisError
+
+    if len(courses) > gr.MAX_COURSES:
+        raise fail(
+            f"at most {gr.MAX_COURSES} courses, got {len(courses)}: compare them in groups with "
+            "the reference first in each",
+            as_json=json_out,
+            code=2,
+        )
+    names = [x.strip() for x in labels.split(",")] if labels else []
+    if len(names) > len(courses):
+        raise fail(f"{len(names)} labels for {len(courses)} courses", as_json=json_out, code=2)
+    th = gr.Thresholds(
+        bin_m=bin_m,
+        flat_pct=flat_pct,
+        steep_pct=steep_pct,
+        class_pct=class_pct,
+        class_limit_pct=class_limit,
+        min_climb_m=min_climb_m,
+        climbs=n_climbs,
+    )
+    workspace = _settings().workspace_dir.expanduser()
+    try:
+        th.check()
+        refs = [gr.parse_spec(spec)[0] for spec in courses]
+    except AnalysisError as exc:
+        raise fail(str(exc), as_json=json_out, code=2) from exc
+    try:
+        need_db = any(gr.is_file_ref(ref, workspace) is None for ref in refs)
+    except AnalysisError as exc:
+        raise fail(str(exc), as_json=json_out) from exc
+    # The database only when an activity is among the courses: files work without one.
+    with _session(json_out) if need_db else nullcontext() as conn:
+        try:
+            loaded = [gr.load_course(conn, spec, workspace) for spec in courses]
+            for course, name in zip(loaded, names, strict=False):
+                if name:
+                    course[0].label = name
+            result = gr.compare([c for c, _, _ in loaded], th, [(lo, hi) for _, lo, hi in loaded])
+        except (AnalysisError, ValueError) as exc:
+            raise fail(str(exc), as_json=json_out) from exc
+    path = None
+    if plot:
+        from thresy.analysis import plots
+
+        path = plots.plot_grades(
+            result,
+            lang=_settings().language,
+            name=gr.plot_name(result["courses"]),
+            share=share,
+        )
+        result["plot"] = str(path)
+    _out(result, json_out, lambda: gr.format_text(result) + _plot_line(path))
+
+
 # segments -------------------------------------------------------------------------------------
 
 

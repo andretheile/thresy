@@ -2,8 +2,10 @@
 
 Style rules: one y-scale per panel (two measures go into stacked panels with a shared x-axis,
 never a second y-axis); thin 2 px lines; solid hairline grids; categorical colours in a fixed
-order (blue, orange, aqua; validated for colour-blind separation); an ordinal blue ramp for
-ordered series such as repetitions; a legend whenever a panel has two or more series.
+order (blue, orange, aqua, yellow; the first three validated for colour-blind separation in any
+combination, yellow only next to aqua and only where every series is also named); an ordinal
+blue ramp for ordered series such as repetitions; a legend whenever a panel has two or more
+series.
 
 Every function returns the path of the written file, ``<COACH_WORKSPACE_DIR>/out/<name>.png``
 by default. Names are deterministic, so plotting the same thing again overwrites the file.
@@ -28,7 +30,7 @@ MUTED = "#898781"
 GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 BAND = "#f0efec"
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a")  # blue, orange, aqua: fixed order
+SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")  # blue, orange, aqua, yellow: fixed order
 RAMP = (
     "#86b6ef",
     "#6da7ec",
@@ -99,6 +101,14 @@ LABELS: dict[str, dict[str, str]] = {
         "route_shape_oneway_parts": "point to point with out-and-back parts",
         "route_shape_oneway_mostly_back": "point to point, mostly retracing itself",
         "route_shape_oneway_back": "point to point, retracing itself",
+        "grades_title": "Gradient per {bin} m",
+        "grades_grade": "Gradient [%]",
+        "grades_classes": "Distance per gradient class",
+        "grades_class_axis": "Gradient [%]: classes {width} % wide, outer ones beyond ±{limit} %",
+        "grades_km": "Distance [km]",
+        "grades_share": "Share of the course [%]",
+        "grades_steep": "steep",
+        "grades_up": "up",
     },
     "de": {
         "distance": "Strecke [km]",
@@ -154,6 +164,14 @@ LABELS: dict[str, dict[str, str]] = {
         "route_shape_oneway_parts": "von A nach B mit Hin-und-zurück-Stücken",
         "route_shape_oneway_mostly_back": "von A nach B, größtenteils auf demselben Weg zurück",
         "route_shape_oneway_back": "von A nach B, ganz auf demselben Weg zurück",
+        "grades_title": "Steigung je {bin} m",
+        "grades_grade": "Steigung [%]",
+        "grades_classes": "Strecke je Steigungsklasse",
+        "grades_class_axis": "Steigung [%]: Klassen je {width} %, die äußeren über ±{limit} %",
+        "grades_km": "Strecke [km]",
+        "grades_share": "Anteil der Strecke [%]",
+        "grades_steep": "steil",
+        "grades_up": "hoch",
     },
 }
 
@@ -641,4 +659,164 @@ def plot_sensor(
     _legend(ax)
     _title(fig, title)
     fig.tight_layout()
+    return _save(fig, name, out_dir)
+
+
+# Gradients ------------------------------------------------------------------------------------
+
+GRADES_W_IN = 6.4
+"""Width of the gradient picture: read on a phone, so the text is set large for its size."""
+GRADES_LEFT_IN, GRADES_RIGHT_IN = 0.72, 0.16
+GRADES_PANEL_IN, GRADES_CLASS_IN = 1.25, 2.3
+MINUS = "−"
+
+
+def _signed(value: float) -> str:
+    text = f"{abs(value):g}"
+    return text if value >= 0 else MINUS + text
+
+
+def plot_grades(
+    result: dict, *, lang: str, name: str, share: bool = False, out_dir: Path | None = None
+) -> Path:
+    """One panel per course with a bar per piece (its gradient along the distance; every panel
+    the same gradient range and km per inch), and below them the distance per gradient class,
+    the courses side by side (``share``: in % of each course's length). Steep gradients are
+    shaded in every panel."""
+    plt = _plt()
+    from matplotlib.ticker import MaxNLocator
+
+    lab = labels(lang)
+    courses = result["courses"]
+    th = result["settings"]
+    steep = float(th["steep_pct"])
+    n = len(courses)
+    colors = SERIES[:n]
+    legend_rows = (n + 1) // 2 if n > 1 else 0
+    # inches, from the top: title, per course (title row, axes, tick labels), the class panel
+    title_in, row_in, ticks_in = 0.5, 0.3, 0.32
+    xlabel_in = 0.28
+    class_top_in = row_in + legend_rows * 0.24
+    bottom_in = 0.62
+    height = (
+        title_in
+        + n * (row_in + GRADES_PANEL_IN + ticks_in)
+        + xlabel_in
+        + class_top_in
+        + GRADES_CLASS_IN
+        + bottom_in
+    )
+    fig = plt.figure(figsize=(GRADES_W_IN, height))
+    width = GRADES_W_IN - GRADES_LEFT_IN - GRADES_RIGHT_IN
+
+    def axes(top_in: float, h_in: float) -> Any:
+        return fig.add_axes(
+            (
+                GRADES_LEFT_IN / GRADES_W_IN,
+                (height - top_in - h_in) / height,
+                width / GRADES_W_IN,
+                h_in / height,
+            )
+        )
+
+    grades = [np.asarray(c["_pieces"].grade_pct) for c in courses]
+    top = max(max(float(np.abs(g).max()) for g in grades), steep) * 1.12 + 0.5
+    span_km = max(c["_pieces"].edges_m[-1] - c["_pieces"].edges_m[0] for c in courses) / 1000
+    y = title_in
+    for k, (c, color, g) in enumerate(zip(courses, colors, grades, strict=True)):
+        y += row_in
+        ax = axes(y, GRADES_PANEL_IN)
+        y += GRADES_PANEL_IN + ticks_in
+        p = c["_pieces"]
+        start = p.edges_m[:-1] / 1000
+        length = p.length_m / 1000
+        bar_px = length.mean() / span_km * width * fig.dpi
+        ax.bar(
+            start,
+            g,
+            width=length * (0.8 if bar_px >= 4 else 1.0),
+            align="edge",
+            color=color,
+            linewidth=0,
+            zorder=3,
+        )
+        ax.axhspan(steep, top, color=BAND, linewidth=0, zorder=0)
+        ax.axhspan(-top, -steep, color=BAND, linewidth=0, zorder=0)
+        ax.axhline(0, color=AXIS, linewidth=1, zorder=2)
+        x0 = p.edges_m[0] / 1000
+        ax.set_xlim(x0, x0 + span_km)
+        ax.set_ylim(-top, top)
+        ticks = [t * steep for t in range(-4, 5) if abs(t * steep) <= top]
+        ax.set_yticks(ticks, [_signed(t) for t in ticks])
+        ax.grid(axis="x", visible=False)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
+        ax.set_ylabel(lab["grades_grade"])
+        ax.set_title(c["label"], loc="left", fontsize=11)
+        ax.set_title(
+            f"{c['length_km']:.1f} km · ↑ {c['ascent_m']} m",
+            loc="right",
+            fontsize=9,
+            fontweight="normal",
+            color=INK_2,
+        )
+        if k == 0:
+            ax.text(
+                1.0,
+                1.0,
+                f" {lab['grades_steep']} ≥ {steep:g} % ",
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=8,
+                color=INK_2,
+                zorder=4,
+            )
+    axes_last = fig.axes[-1]
+    axes_last.set_xlabel(lab["distance"])
+    y += xlabel_in + class_top_in
+    ax = axes(y, GRADES_CLASS_IN)
+    centres = np.array([cl["centre_pct"] for cl in courses[0]["classes"]])
+    w = float(th["class_pct"])
+    x = centres / w
+    group = 0.8
+    bar = group / n
+    for k, (c, color) in enumerate(zip(courses, colors, strict=True)):
+        values = [cl["share_pct"] if share else cl["km"] for cl in c["classes"]]
+        ax.bar(
+            x - group / 2 + bar * (k + 0.5),
+            values,
+            width=bar * 0.86,
+            color=color,
+            linewidth=0,
+            zorder=3,
+            label=c["label"],
+        )
+    k_max = float(x.max())
+    ax.set_xlim(-k_max - 0.6, k_max + 0.6)
+    ax.axvspan(steep / w, k_max + 0.6, color=BAND, linewidth=0, zorder=0)
+    ax.axvspan(-k_max - 0.6, -steep / w, color=BAND, linewidth=0, zorder=0)
+    edges = np.arange(-k_max + 0.5, k_max, 1.0)
+    # Room for about a dozen labels on a phone; thinned out symmetrically, never the two
+    # edges next to 0, which would run into each other.
+    every = 1 if len(edges) <= 12 else 2
+    ax.set_xticks(
+        edges,
+        [_signed(round(e * w, 2)) if round(abs(e) + 0.5) % every == 0 else "" for e in edges],
+    )
+    ax.grid(axis="x", visible=False)
+    limit = (k_max - 0.5) * w
+    ax.set_xlabel(lab["grades_class_axis"].format(width=f"{w:g}", limit=f"{limit:g}"))
+    ax.set_ylabel(lab["grades_share"] if share else lab["grades_km"])
+    ax.set_title(lab["grades_classes"], loc="left", fontsize=11, pad=6 + legend_rows * 17)
+    if n > 1:
+        ax.legend(
+            loc="lower left",
+            bbox_to_anchor=(0, 1.0),
+            ncol=2,
+            borderaxespad=0.3,
+            handlelength=1.2,
+            columnspacing=1.4,
+            fontsize=9,
+        )
+    _title(fig, lab["grades_title"].format(bin=f"{th['bin_m']:g}"))
     return _save(fig, name, out_dir)
