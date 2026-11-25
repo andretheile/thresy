@@ -169,6 +169,40 @@ The last two use `run`, not `exec --user agent`: `exec` would start a process as
 
 Check that (1) the run ends with `"ok": true` and the text `OK`, and no line says "retrying once without an effort setting" (that would mean the pinned CLI rejected `--effort high`); (2) the session transcript names the level `high` (Claude Code's changelog says transcripts record the effort in force; if the field is named differently, look for the level next to the request); (3) neither `COACH_CLAUDE_ENV`, `COACH_CLAUDE_ARGS` nor the agent's credential file sets `CLAUDE_CODE_EFFORT_LEVEL` or `--effort`, which would override the bridge's levels. To check a resumed session as well, repeat the first command with `--resume <session id from the first run> --effort low` and look for `low` in the same transcript.
 
+## Token use and cost
+
+Thresy is built to run on a subscription login, where a run costs nothing extra. On pay-per-token credits (an API key, or a router such as OpenRouter) every run is billed by its tokens, and an agent run uses far more of them than the length of its answer suggests: the harness sends the whole context again with every tool call, so a run of 30 steps over a context of 60,000 tokens reads about 2 million input tokens.
+
+**One measurement.** The first six days of one deployment, in November 2026: 26 runs (4.3 a day) with Claude Code and Claude Opus 5.5, effort `xhigh` for every kind of run, one session per day. The tokens are the run records' `usage`, the cost is their `cost_usd`.
+
+| Kind of run | Runs | Input tokens per run | Of which new | Output tokens per run | Cost per run | Range |
+|---|---|---|---|---|---|---|
+| Chat message answered in text | 13 | 555,000 | 27,000 | 7,400 | $0.47 | $0.04 to $0.89 |
+| Chat message answered with a plot | 3 | 2,290,000 | 46,000 | 21,500 | $1.25 | $0.88 to $1.66 |
+| Morning briefing | 5 | 332,000 | 32,000 | 4,900 | $0.41 | $0.35 to $0.56 |
+| After-run debrief | 5 | 673,000 | 58,000 | 7,800 | $0.74 | $0.42 to $1.01 |
+| All | 26 | 735,000 | 36,000 | 8,600 | $0.60 | $0.04 to $1.66 |
+
+Together that is 19.1 million input tokens and 224,000 output tokens. Of the input, 18.2 million tokens were read from the prompt cache and 0.94 million were new and written to it. The cost was $15.65: $2.61 a day, about $78 in 30 days. The list prices of that month (per million tokens: input $4, output $20, cache read $0.20, one-hour cache write $8) give $15.63 for the same tokens, so `cost_usd` is the list-price cost. A router's own fee comes on top (OpenRouter: 5.5 % when buying credits, no markup per token).
+
+**Where the money goes.** 48 % was cache writes, 29 % output and 23 % cache reads; input outside the cache cost nothing worth counting. Claude Code wrote every cache entry with the one-hour lifetime, which costs twice the input price. A run that starts more than an hour after the session's previous one therefore writes the whole context again, 30,000 to 70,000 tokens here, or $0.25 to $0.55 before the first word of the answer. That is most of what a short run such as the morning briefing costs.
+
+**What changes it.**
+
+- The model tier, more than anything else. At the same token counts a model at half the price halves the bill (`COACH_CLAUDE_MODEL_SMART`; Claude Sonnet 5.5 was at half of Opus 5.5 on each of the four prices).
+- The effort (`COACH_BRIDGE_CHAT_EFFORT`, `COACH_BRIDGE_PROACTIVE_EFFORT`), which moves the output tokens and the number of steps. Not measured here.
+- Another model family or another harness. Pricing these token counts with another model's list prices gives a first guess and no more: a different tokenizer counts the same text differently, a different model takes a different number of steps, and the result depends on caching above all. 95 % of the input here was cache reads; without a single cache hit the same tokens would have cost $81 at the same prices. No harness other than Claude Code has been measured.
+
+**Your own numbers.** Every run record holds them, on a subscription too (there `cost_usd` is the list-price estimate, not a bill). Codex reports tokens but no cost, the Cursor CLI neither.
+
+```sql
+SELECT trigger, count(*) AS runs, round(avg(cost_usd)::numeric, 2) AS usd_per_run,
+       round(avg((usage->>'input_tokens')::numeric + (usage->>'cache_read_tokens')::numeric
+                 + (usage->>'cache_write_tokens')::numeric)) AS input_tokens_per_run,
+       round(avg((usage->>'output_tokens')::numeric)) AS output_tokens_per_run
+FROM agent_runs WHERE status = 'ok' GROUP BY trigger ORDER BY runs DESC;
+```
+
 ## Claude Code
 
 ### Command line

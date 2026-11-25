@@ -31,7 +31,9 @@ otherwise. Placeholders look like `<this>`.
   grows by about 0.5 MB per hour of recorded activity, FIT files take their own size.
 - Accounts: Garmin Connect; Telegram; a subscription or API key for the coding agent (Claude Code
   with a Pro, Max, Team or Enterprise plan is the default; Codex and Cursor also work, see
-  docs/runners.md); optionally a Google Cloud project for off-site backups.
+  docs/runners.md); optionally a Google Cloud project for off-site backups. What the
+  coach's runs come to on pay-per-token credits instead of a subscription is in docs/runners.md,
+  "Token use and cost".
 
 ## 2. Clone
 
